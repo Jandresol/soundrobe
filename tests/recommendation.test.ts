@@ -44,7 +44,7 @@ void (async () => {
   await retrievalTest();
   rankingTest();
   outfitCoherenceTest();
-  endToEndMutationTest();
+  await endToEndMutationTest();
   await preAwinDeterminismTest();
   await preAwinSensitivityTest();
   await preAwinStabilityTest();
@@ -167,16 +167,24 @@ function outfitCoherenceTest() {
   assert(outfits.every((outfit) => outfit.products.some((entry) => entry.intent.category === "shoes")), "assembler requires shoes for valid outfits");
 }
 
-function endToEndMutationTest() {
+async function endToEndMutationTest() {
   const baseMusic = musicProfile(["r&b", "soul", "pop"], ["2000s"]);
   const mutatedMusic = musicProfile(["r&b", "soul", "punk"], ["2000s"]);
   const baseStyle = buildStyleProfile(baseMusic);
   const mutatedStyle = buildStyleProfile(mutatedMusic);
   const baseIntents = generateGarmentIntents(baseStyle);
   const mutatedIntents = generateGarmentIntents(mutatedStyle);
+  const commerce = new TestCatalogCommerceProvider({ maxPrice: 250 });
+  const baseRanked = await rankProducts(await Promise.all(baseIntents.map(async (intent) => ({ intent, candidates: await commerce.search(intent) }))));
+  const mutatedRanked = await rankProducts(await Promise.all(mutatedIntents.map(async (intent) => ({ intent, candidates: await commerce.search(intent) }))));
+  const baseOutfits = assembleOutfits(baseRanked);
+  const mutatedOutfits = assembleOutfits(mutatedRanked);
+
   assert.notDeepEqual(baseMusic.combinedGenres.map((signal) => signal.id), mutatedMusic.combinedGenres.map((signal) => signal.id), "music input changes");
   assert.notDeepEqual(labels(baseStyle.garmentTypes, 8), labels(mutatedStyle.garmentTypes, 8), "style profile changes");
   assert.notDeepEqual(baseIntents.map((intent) => intent.searchQuery), mutatedIntents.map((intent) => intent.searchQuery), "garment searches change");
+  assert.notDeepEqual(baseRanked.slice(0, 10).map((rec) => rec.product.id), mutatedRanked.slice(0, 10).map((rec) => rec.product.id), "retrieved/ranked products change");
+  assert.notDeepEqual(baseOutfits[0]?.products.map((rec) => rec.product.id), mutatedOutfits[0]?.products.map((rec) => rec.product.id), "assembled outfit changes");
 }
 
 async function preAwinDeterminismTest() {
