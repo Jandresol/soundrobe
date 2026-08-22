@@ -36,6 +36,7 @@ export function OutfitCanvas({
   onSelectSlot: (category: string, garmentId: string) => void;
 }) {
   const visibleGarments = garments.filter(Boolean) as Garment[];
+  const emptySlots = Object.entries(slotMeta) as Array<[Category, { label: string; className: string }]>;
 
   return (
     <div className="dressup-stage border-2 border-[#202020] p-3">
@@ -50,7 +51,7 @@ export function OutfitCanvas({
       </div>
 
       <div className="grid auto-rows-[minmax(128px,auto)] gap-3 md:grid-cols-2">
-        {visibleGarments.map((garment) => {
+        {visibleGarments.length ? visibleGarments.map((garment) => {
           const isActive = selectedCategory === garment.category;
           const meta = slotMeta[garment.category];
 
@@ -83,7 +84,19 @@ export function OutfitCanvas({
             </div>
           </button>
           );
-        })}
+        }) : emptySlots.map(([category, meta]) => (
+          <div
+            key={category}
+            className={`min-h-[128px] border-2 border-dashed border-[#6f7684] bg-[#f8f9fb]/75 p-2 ${meta.className}`}
+          >
+            <div className="flex h-full min-h-[108px] items-center justify-center border-2 border-[#202020] bg-white/70">
+              <div className="text-center text-[10px] font-bold uppercase leading-4 text-[#5d5360]">
+                <div className="ui-chrome-text text-[#1746b8]">{meta.label}</div>
+                <div>Build to fill slot</div>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
