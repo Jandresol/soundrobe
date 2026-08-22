@@ -76,14 +76,30 @@ function productFromSerpResult(result: SerpApiShoppingResult, intent: GarmentInt
     availability: result.availability?.toLowerCase().includes("out") ? "out_of_stock" : "in_stock",
     attributes: {
       category: intent.category,
-      garmentType: intent.garmentType,
-      colors: intent.colors,
-      materials: intent.materials,
-      silhouettes: intent.silhouettes,
-      aesthetics: intent.aesthetics,
-      eras: intent.eras,
+      garmentType: inferGarmentType(title, intent.garmentType),
+      colors: inferMatches(title, intent.colors),
+      materials: inferMatches(title, intent.materials),
+      silhouettes: inferMatches(title, intent.silhouettes),
+      aesthetics: inferMatches(title, intent.aesthetics),
+      eras: inferMatches(title, intent.eras),
     },
   };
+}
+
+function inferGarmentType(title: string, fallback: string) {
+  const normalized = title.toLowerCase();
+  return normalized.includes(fallback.toLowerCase()) || tokenOverlap(normalized, fallback) >= 0.5 ? fallback : undefined;
+}
+
+function inferMatches(title: string, values: string[]) {
+  const normalized = title.toLowerCase();
+  return values.filter((value) => normalized.includes(value.toLowerCase()) || tokenOverlap(normalized, value) >= 0.7);
+}
+
+function tokenOverlap(text: string, value: string) {
+  const tokens = value.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 2);
+  if (!tokens.length) return 0;
+  return tokens.filter((token) => text.includes(token)).length / tokens.length;
 }
 
 function filterProducts(products: ProductCandidate[], intent: GarmentIntent, preferences: ShoppingPreferences) {

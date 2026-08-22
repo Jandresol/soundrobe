@@ -6,10 +6,10 @@ export const MUSIC_TIME_WEIGHTS = {
 
 export const PRODUCT_SCORE_WEIGHTS = {
   garmentType: 32,
-  color: 18,
-  material: 15,
-  silhouette: 10,
-  aesthetic: 12,
+  color: 12,
+  material: 17,
+  silhouette: 11,
+  aesthetic: 13,
   era: 7,
   priority: 10,
   availability: 6,

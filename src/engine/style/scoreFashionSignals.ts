@@ -5,6 +5,20 @@ import { eraFashionAssociations } from "@/src/knowledge/eraFashionMap";
 
 type Bucket = "traits" | "colors" | "materials" | "silhouettes" | "garmentTypes" | "accessories" | "aesthetics";
 
+const fallbackAssociation: FashionAssociation = {
+  id: "unknown-genre-wearable-core",
+  signals: {
+    traits: ["personal", "wearable"],
+    colors: ["black", "white", "denim"],
+    materials: ["cotton", "denim"],
+    silhouettes: ["relaxed", "layered"],
+    garmentTypes: ["white tee", "straight jeans", "sneakers", "tote bag"],
+    accessories: ["sunglasses"],
+    aesthetics: ["casual", "everyday"],
+  },
+  weight: 0.22,
+};
+
 export function scoreFashionSignals(genres: WeightedSignal[], eras: WeightedSignal[]) {
   const buckets: Record<Bucket, Map<string, WeightedSignal>> = {
     traits: new Map(), colors: new Map(), materials: new Map(), silhouettes: new Map(), garmentTypes: new Map(), accessories: new Map(), aesthetics: new Map(),
@@ -24,19 +38,29 @@ export function scoreFashionSignals(genres: WeightedSignal[], eras: WeightedSign
   };
 
   for (const genre of genres) {
+    let matched = false;
     for (const association of genreFashionAssociations) {
       if (association.genres?.some((entry) => genre.id.includes(entry))) {
+        matched = true;
         apply(association, genre.weight, { kind: "genre", id: genre.id, label: genre.label, weight: genre.weight });
       }
     }
+    if (!matched) {
+      apply(fallbackAssociation, genre.weight, { kind: "genre", id: genre.id, label: genre.label, weight: genre.weight });
+    }
   }
   for (const association of eraFashionAssociations) {
-    const genre = genres.find((entry) => association.genres?.some((match) => entry.id.includes(match)));
     const era = eras.find((entry) => association.eras?.includes(entry.label));
-    if (genre && era) {
-      const weight = (genre.weight * 0.55 + era.weight * 0.45);
-      apply(association, weight, { kind: "association", id: association.id, label: `${era.label} ${genre.label}`, weight });
-    }
+    if (!era) continue;
+
+    const genre = association.genres
+      ? genres.find((entry) => association.genres?.some((match) => entry.id.includes(match)))
+      : undefined;
+    if (association.genres && !genre) continue;
+
+    const weight = genre ? (genre.weight * 0.55 + era.weight * 0.45) : era.weight * 0.65;
+    const label = genre ? `${era.label} ${genre.label}` : era.label;
+    apply(association, weight, { kind: "association", id: association.id, label, weight });
   }
 
   const normalize = (map: Map<string, WeightedSignal>) => {

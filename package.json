@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
-    "test": "tsc --noEmit",
+    "test": "tsc --noEmit && node -r ./tests/register-ts.cjs ./tests/recommendation.test.ts",
     "start": "next start",
     "lint": "eslint"
   },

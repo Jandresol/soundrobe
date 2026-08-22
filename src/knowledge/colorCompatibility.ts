@@ -17,6 +17,14 @@ export const COLOR_HEX: Record<string, string> = {
   navy: "#1c2f55",
   plum: "#4b244a",
   "smoky pink": "#d49ab7",
+  charcoal: "#2b2f36",
+  "royal purple": "#5b2bbf",
+  "electric blue": "#1746b8",
+  "vibrant red": "#d3202c",
+  "butter yellow": "#f4d86a",
+  "juicy peach": "#f3a07c",
+  turquoise: "#20b7b5",
+  orange: "#f26b2f",
 };
 
 export const COLOR_FAMILIES: Record<string, string> = {
@@ -38,6 +46,14 @@ export const COLOR_FAMILIES: Record<string, string> = {
   "acid green": "bright",
   plum: "deep",
   "smoky pink": "soft",
+  charcoal: "neutral",
+  "royal purple": "deep",
+  "electric blue": "bright",
+  "vibrant red": "bright",
+  "butter yellow": "soft",
+  "juicy peach": "soft",
+  turquoise: "bright",
+  orange: "bright",
 };
 
 export function colorCompatibilityScore(colors: string[]) {

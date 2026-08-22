@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AwinCommerceProvider } from "@/src/services/commerce/AwinCommerceProvider";
 import { DemoCommerceProvider } from "@/src/services/commerce/DemoCommerceProvider";
 import type { CommerceProvider } from "@/src/services/commerce/CommerceProvider";
 import { SerpApiCommerceProvider } from "@/src/services/commerce/SerpApiCommerceProvider";
@@ -98,6 +99,14 @@ function numberParam(params: URLSearchParams, name: string) {
 }
 
 function commerceProviderForRequest(preferences = { maxPrice: 250 }): CommerceProvider {
+  if (process.env.COMMERCE_PROVIDER === "awin" && process.env.AWIN_ACCESS_TOKEN && process.env.AWIN_PUBLISHER_ID && process.env.AWIN_ADVERTISER_IDS) {
+    return new AwinCommerceProvider(
+      process.env.AWIN_ACCESS_TOKEN,
+      process.env.AWIN_PUBLISHER_ID,
+      process.env.AWIN_ADVERTISER_IDS.split(",").map((id) => id.trim()).filter(Boolean),
+      preferences,
+    );
+  }
   if (process.env.COMMERCE_PROVIDER === "serpapi" && process.env.SERPAPI_API_KEY) {
     return new SerpApiCommerceProvider(process.env.SERPAPI_API_KEY, preferences);
   }
