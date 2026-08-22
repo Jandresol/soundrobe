@@ -45,6 +45,11 @@ void (async () => {
   rankingTest();
   outfitCoherenceTest();
   endToEndMutationTest();
+  await preAwinDeterminismTest();
+  await preAwinSensitivityTest();
+  await preAwinStabilityTest();
+  await preAwinRelevanceTest();
+  console.log("Recommendation tests passed");
 })();
 
 async function existingMvpTests() {
@@ -172,6 +177,32 @@ function endToEndMutationTest() {
   assert.notDeepEqual(baseMusic.combinedGenres.map((signal) => signal.id), mutatedMusic.combinedGenres.map((signal) => signal.id), "music input changes");
   assert.notDeepEqual(labels(baseStyle.garmentTypes, 8), labels(mutatedStyle.garmentTypes, 8), "style profile changes");
   assert.notDeepEqual(baseIntents.map((intent) => intent.searchQuery), mutatedIntents.map((intent) => intent.searchQuery), "garment searches change");
+}
+
+async function preAwinDeterminismTest() {
+  const style = styleForGenres(["r&b", "neo-soul", "club"], ["2000s"]);
+  const first = await rankForStyle(style, new TestCatalogCommerceProvider({ maxPrice: 250 }));
+  const second = await rankForStyle(style, new TestCatalogCommerceProvider({ maxPrice: 250 }));
+  assert.deepEqual(first.slice(0, 12).map((rec) => [rec.product.id, rec.intent.id, rec.score]), second.slice(0, 12).map((rec) => [rec.product.id, rec.intent.id, rec.score]), "test_catalog recommendations are deterministic");
+}
+
+async function preAwinSensitivityTest() {
+  const punkIndustrial = await rankForStyle(styleForGenres(["punk", "industrial", "hardcore"], ["2000s"]), new TestCatalogCommerceProvider({ maxPrice: 250 }));
+  const softSoul = await rankForStyle(styleForGenres(["neo-soul", "r&b", "quiet storm"], ["1990s"]), new TestCatalogCommerceProvider({ maxPrice: 250 }));
+  assert(jaccard(punkIndustrial.slice(0, 12).map((rec) => rec.product.id), softSoul.slice(0, 12).map((rec) => rec.product.id)) < 0.5, "test_catalog recommendations respond to meaningfully different music");
+}
+
+async function preAwinStabilityTest() {
+  const base = await rankForStyle(styleForGenres(["r&b", "neo-soul", "soul", "pop"], ["2000s"]), new TestCatalogCommerceProvider({ maxPrice: 250 }));
+  const tinyChange = await rankForStyle(styleForGenres(["r&b", "neo-soul", "soul", "dance pop"], ["2000s"]), new TestCatalogCommerceProvider({ maxPrice: 250 }));
+  assert(jaccard(base.slice(0, 12).map((rec) => rec.product.id), tinyChange.slice(0, 12).map((rec) => rec.product.id)) >= 0.45, "tiny music changes do not replace the whole wardrobe");
+}
+
+async function preAwinRelevanceTest() {
+  const style = styleForGenres(["r&b", "sensual"], ["2000s"]);
+  const products = await rankForStyle(style, new TestCatalogCommerceProvider({ maxPrice: 250 }));
+  const topIds = products.slice(0, 8).map((rec) => rec.product.id);
+  assert(topIds.includes("test-rib-knit") || topIds.includes("test-slip-skirt") || topIds.includes("test-bodycon"), "test_catalog ranker finds obvious r&b/sensual matches");
 }
 
 function styleForGenres(genres: string[], eras: string[] = []) {
