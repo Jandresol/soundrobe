@@ -48,6 +48,7 @@ export default function HomePage() {
   const [soundrobeResult, setSoundrobeResult] = useState<SoundrobeResult | null>(null);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
   const [spotifyMessage, setSpotifyMessage] = useState("Demo music ready");
+  const [flowError, setFlowError] = useState<string | null>(null);
   const [analysisMusicSource, setAnalysisMusicSource] = useState<"spotify" | "demo">("demo");
   const [timeWeights, setTimeWeights] = useState({ longTerm: 50, mediumTerm: 30, shortTerm: 20 });
   const [analysisIndex, setAnalysisIndex] = useState(0);
@@ -216,6 +217,7 @@ export default function HomePage() {
         }
         const result = await response.json() as SoundrobeResult;
         if (cancelled) return;
+        setFlowError(null);
         setSoundrobeResult(result);
         setNowPlayingIndex(0);
         setSpotifyConnected(result.metadata.musicSource === "spotify");
@@ -231,7 +233,9 @@ export default function HomePage() {
       } catch (error) {
         if (!cancelled) {
           setSpotifyConnected(false);
-          setSpotifyMessage(error instanceof Error ? error.message : "Could not build from Spotify. Connect again.");
+          const message = error instanceof Error ? error.message : "Could not build your Soundrobe. Try again.";
+          setFlowError(message);
+          setSpotifyMessage(message);
           setScreen("home");
         }
       }
@@ -243,13 +247,26 @@ export default function HomePage() {
   }, [analysisMusicSource, screen, timeWeights]);
 
   const handleDemoStart = () => {
+    setFlowError(null);
     setAnalysisMusicSource("demo");
     setScreen("analysis");
   };
 
   const handleEnterSoundrobe = () => {
+    setFlowError(null);
     setAnalysisMusicSource("spotify");
     setScreen("analysis");
+  };
+
+  const handleTabChange = (nextScreen: Screen) => {
+    const needsResult = ["dna", "soundrobe", "looks", "closet", "profile"].includes(nextScreen);
+    if (needsResult && !soundrobeResult) {
+      setFlowError("Build a Soundrobe first, then those tabs unlock.");
+      setScreen("home");
+      return;
+    }
+    setFlowError(null);
+    setScreen(nextScreen);
   };
 
   const updateTimeWeight = (key: "longTerm" | "mediumTerm" | "shortTerm", value: number) => {
@@ -314,6 +331,7 @@ export default function HomePage() {
 
   const handleReset = () => {
     setScreen("home");
+    setFlowError(null);
     setCurrentLook(defaultLook);
     setSelectedCategory("top");
     setSelectedSlotCategory("outerwear");
@@ -370,6 +388,15 @@ export default function HomePage() {
     if (trackIndex >= 0) setNowPlayingIndex(trackIndex);
   };
 
+  const handleShopCurrentLook = () => {
+    const urls = currentLookGarments.map((garment) => garment.productUrl).filter((url): url is string => Boolean(url));
+    if (!urls.length) {
+      setFlowError("No shop links are available for this look yet.");
+      return;
+    }
+    urls.slice(0, 4).forEach((url) => window.open(url, "_blank", "noopener,noreferrer"));
+  };
+
   const handleSelectOutfitSlot = (category: string, garmentId: string) => {
     const normalized = category === "shoes" ? "shoe" : category;
     setSelectedSlotCategory(normalized);
@@ -381,14 +408,14 @@ export default function HomePage() {
   };
 
   const homeTools = [
-    { icon: "↖", label: "Profile", action: () => setScreen("profile") },
-    { icon: "♪", label: "Music DNA", action: () => setScreen(soundrobeResult ? "dna" : "home") },
+    { icon: "↖", label: "Profile", action: () => handleTabChange("profile") },
+    { icon: "♪", label: "Music DNA", action: () => handleTabChange("dna") },
     { icon: "♡", label: "Save Look", action: handleSaveLook },
     { icon: "✓", label: "Enter", action: spotifyConnected ? handleEnterSoundrobe : handleDemoStart },
     { icon: "✂", label: "Remix", action: handleRemix },
-    { icon: "A", label: "Palette", action: () => setScreen(soundrobeResult ? "dna" : "home") },
-    { icon: "▭", label: "Looks", action: () => setScreen("looks") },
-    { icon: "☆", label: "Closet", action: () => setScreen("closet") },
+    { icon: "A", label: "Palette", action: () => handleTabChange("dna") },
+    { icon: "▭", label: "Looks", action: () => handleTabChange("looks") },
+    { icon: "☆", label: "Closet", action: () => handleTabChange("closet") },
   ];
 
   const renderScreen = () => {
@@ -433,6 +460,11 @@ export default function HomePage() {
               <div className="ui-chrome-text mt-3 inline-flex border-2 border-[#202020] bg-[#f8f9fb] px-2 py-1 text-[10px] font-bold uppercase text-[#4e5666]">
                 {spotifyMessage}
               </div>
+              {flowError ? (
+                <div className="mt-3 border-2 border-[#202020] bg-[#fff7cc] p-2 text-[10px] font-bold uppercase leading-4 text-[#633c00]">
+                  {flowError}
+                </div>
+              ) : null}
             </div>
             <OutfitCanvas garments={currentLookGarments} selectedCategory={normalizedSelectedCategory} onSelectSlot={handleSelectOutfitSlot} />
           </div>
@@ -981,7 +1013,7 @@ export default function HomePage() {
             <button
               key={tab.label}
               type="button"
-              onClick={() => setScreen(tab.value)}
+              onClick={() => handleTabChange(tab.value)}
               className={`retro-tab ${screen === tab.value ? "bg-[#ffd3e8] text-[#111111]" : "text-[#111111]"}`}
             >
               {tab.label}
@@ -1099,7 +1131,7 @@ export default function HomePage() {
                   <div className="flex flex-wrap gap-1.5">
                     <RetroButton onClick={handleRemix}>REMIX LOOK</RetroButton>
                     <RetroButton onClick={handleSaveLook}>SAVE</RetroButton>
-                    <RetroButton onClick={() => setScreen("closet")}>SHOP PIECES</RetroButton>
+                    <RetroButton onClick={handleShopCurrentLook}>SHOP PIECES</RetroButton>
                   </div>
                 </div>
               </div>
