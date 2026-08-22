@@ -12,7 +12,7 @@ import { Panel } from "@/components/ui/Panel";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { RetroButton } from "@/components/ui/RetroButton";
 import { adaptGarments, adaptMusicProfile, adaptOutfits, adaptStyleProfile } from "@/lib/result-adapter";
-import { defaultLook as fallbackLook, defaultSavedGarments, defaultSavedLooks, garments as fallbackGarments, lookPresets as fallbackLooks, musicProfile as fallbackMusicProfile, styleProfile as fallbackStyleProfile } from "@/lib/mock-data";
+import { defaultLook as fallbackLook, garments as fallbackGarments, lookPresets as fallbackLooks, musicProfile as fallbackMusicProfile, styleProfile as fallbackStyleProfile } from "@/lib/mock-data";
 import type { SoundrobeResult } from "@/src/domain/soundrobe/types";
 import type { Category, Garment, Outfit, Screen } from "@/types/soundrobe";
 
@@ -62,15 +62,24 @@ export default function HomePage() {
     if (typeof window === "undefined") return null;
     return window.localStorage.getItem("soundrobe-profile-image");
   });
+  const [profileDisplayName, setProfileDisplayName] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem("soundrobe-profile-name") ?? "";
+  });
+  const [profilePixelation, setProfilePixelation] = useState<number>(() => {
+    if (typeof window === "undefined") return 55;
+    const saved = Number(window.localStorage.getItem("soundrobe-profile-pixelation"));
+    return Number.isFinite(saved) ? saved : 55;
+  });
   const [savedGarments, setSavedGarments] = useState<string[]>(() => {
-    if (typeof window === "undefined") return defaultSavedGarments;
+    if (typeof window === "undefined") return [];
     const savedPieces = window.localStorage.getItem("soundrobe-saved-garments");
-    return savedPieces ? JSON.parse(savedPieces) as string[] : defaultSavedGarments;
+    return savedPieces ? JSON.parse(savedPieces) as string[] : [];
   });
   const [savedLooks, setSavedLooks] = useState<string[]>(() => {
-    if (typeof window === "undefined") return defaultSavedLooks;
+    if (typeof window === "undefined") return [];
     const savedOutfits = window.localStorage.getItem("soundrobe-saved-looks");
-    return savedOutfits ? JSON.parse(savedOutfits) as string[] : defaultSavedLooks;
+    return savedOutfits ? JSON.parse(savedOutfits) as string[] : [];
   });
   const [savedLookNames, setSavedLookNames] = useState<Record<string, string>>(() => {
     if (typeof window === "undefined") return {};
@@ -84,6 +93,7 @@ export default function HomePage() {
   const defaultLook = lookPresets[0] ?? fallbackLook;
   const musicProfile = useMemo(() => soundrobeResult ? adaptMusicProfile(soundrobeResult) : fallbackMusicProfile, [soundrobeResult]);
   const styleProfile = useMemo(() => soundrobeResult ? adaptStyleProfile(soundrobeResult) : fallbackStyleProfile, [soundrobeResult]);
+  const visibleProfileName = profileDisplayName.trim() || (soundrobeResult ? musicProfile.userName : "Your Soundrobe");
   const appliedTimeWeights = soundrobeResult?.metadata.diagnostics?.timeWeights ?? { longTerm: 0.5, mediumTerm: 0.3, shortTerm: 0.2 };
   const displayedAppliedWeights = {
     longTerm: Math.round(appliedTimeWeights.longTerm * 100),
@@ -147,6 +157,17 @@ export default function HomePage() {
     if (profileImage) window.localStorage.setItem("soundrobe-profile-image", profileImage);
     else window.localStorage.removeItem("soundrobe-profile-image");
   }, [profileImage]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (profileDisplayName.trim()) window.localStorage.setItem("soundrobe-profile-name", profileDisplayName);
+    else window.localStorage.removeItem("soundrobe-profile-name");
+  }, [profileDisplayName]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("soundrobe-profile-pixelation", String(profilePixelation));
+  }, [profilePixelation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -393,6 +414,11 @@ export default function HomePage() {
     setSavedLookNames((previous) => ({ ...previous, [currentLook.id]: currentLook.name }));
   };
 
+  const handleSaveSelectedPiece = () => {
+    if (!selectedGarmentId) return;
+    setSavedGarments((previous) => (previous.includes(selectedGarmentId) ? previous : [...previous, selectedGarmentId]));
+  };
+
   const handleSaveSpecificLook = (look: Outfit) => {
     setSavedLooks((previous) => (previous.includes(look.id) ? previous : [...previous, look.id]));
     setSavedLookNames((previous) => ({ ...previous, [look.id]: savedLookNames[look.id] ?? look.name }));
@@ -427,43 +453,15 @@ export default function HomePage() {
     removeCurrentLookGarment(garmentId);
   };
 
-  const homeTools = [
-    { icon: "↖", label: "Profile", action: () => handleTabChange("profile") },
-    { icon: "♪", label: "Music DNA", action: () => handleTabChange("dna") },
-    { icon: "♡", label: "Save Look", action: handleSaveLook },
-    { icon: "✓", label: "Enter", action: spotifyConnected ? handleEnterSoundrobe : handleDemoStart },
-    { icon: "✂", label: "Remix", action: handleRemix },
-    { icon: "A", label: "Palette", action: () => handleTabChange("dna") },
-    { icon: "▭", label: "Looks", action: () => handleTabChange("looks") },
-    { icon: "☆", label: "Closet", action: () => handleTabChange("closet") },
-  ];
-
   const renderScreen = () => {
     if (screen === "home") {
       return (
-        <div className="grid gap-3 p-2 md:grid-cols-[150px_minmax(0,1fr)] md:p-3 xl:grid-cols-[150px_minmax(0,1fr)_320px]">
-          <div className="paint-rail border-2 border-[#202020] p-2">
-            <div className="grid grid-cols-2 gap-1.5">
-              {homeTools.map((tool) => (
-                <button
-                  key={tool.icon}
-                  type="button"
-                  title={tool.label}
-                  aria-label={tool.label}
-                  onClick={tool.action}
-                  className="bevel-button h-12 border-2 border-[#202020] bg-[#f3e5ee] text-lg font-bold text-[#1746b8]"
-                >
-                  {tool.icon}
-                </button>
-              ))}
-            </div>
-          </div>
-
+        <div className="grid gap-3 p-2 md:p-3 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="space-y-3">
             <div className="border-2 border-[#202020] bg-[#f7f1f6] p-4 shadow-[5px_5px_0_rgba(23,70,184,0.45)]">
               <div className="ui-chrome-text mb-2 bg-[#1746b8] px-2 py-1 text-[11px] font-bold uppercase text-white">all new ★ soundrobe</div>
               <h1 className="display-wordmark text-[44px] uppercase leading-[0.9] text-[#1746b8] md:text-[72px]">{"LET'S MATCH!"}</h1>
-              <p className="mt-2 max-w-xl text-[13px] font-semibold leading-5 text-[#303746]">Turn your listening history into a music DNA board, color story, shoppable pieces, and remixable looks.</p>
+              <p className="mt-2 max-w-xl text-[13px] font-semibold leading-5 text-[#303746]">Connect your music, tune your taste mix, then enter a wardrobe built from your songs, albums, tags, and eras.</p>
               <div className="mt-4 flex flex-wrap gap-2">
                 {spotifyConnected ? (
                   <>
@@ -488,9 +486,9 @@ export default function HomePage() {
             </div>
             <div className="grid gap-3 lg:grid-cols-3">
               {[
-                ["1", "Connect or demo", spotifyConnected ? "Spotify is ready. Enter to build with your profile." : "Use Spotify for your music, or preview with demo data."],
-                ["2", "Review Music DNA", "Check genres, tags, albums, songs, and adjust the time mix."],
-                ["3", "Build the wardrobe", "Open Soundrobe to remix pieces, save looks, and shop links."],
+                ["1", "Add music", spotifyConnected ? "Spotify is connected. Enter to build from your profile." : "Connect Spotify, or preview the full app with demo music."],
+                ["2", "Tune the mix", "Balance archive taste, seasonal favorites, and recent plays."],
+                ["3", "Enter Soundrobe", "Review your DNA, remix a look, save it, or open shop links."],
               ].map(([step, title, body]) => (
                 <div key={step} className="border-2 border-[#202020] bg-[#f8f9fb] p-3 shadow-[3px_3px_0_rgba(32,32,32,0.22)]">
                   <div className="mb-2 inline-flex h-7 w-7 items-center justify-center border-2 border-[#202020] bg-[#ffd3e8] text-[11px] font-black">{step}</div>
@@ -502,32 +500,6 @@ export default function HomePage() {
           </div>
 
           <div className="space-y-3">
-            <Panel title="PROFILE SETUP">
-              <div className="space-y-3">
-                <div className="grid grid-cols-[82px_minmax(0,1fr)] gap-3">
-                  <div className="flex h-[82px] items-center justify-center overflow-hidden border-2 border-[#202020] bg-[#eef3fb]">
-                    {profileImage ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={profileImage} alt="" className="h-full w-full object-cover [image-rendering:pixelated]" />
-                    ) : (
-                      <UserRound className="h-10 w-10 text-[#1746b8]" />
-                    )}
-                  </div>
-                  <div className="min-w-0 text-[10px] font-bold uppercase leading-4">
-                    <div className="mb-2 text-[#151821]">{musicProfile.userName}</div>
-                    <label className="bevel-button inline-flex cursor-pointer border-2 border-[#202020] bg-[#ffd3e8] px-2 py-1">
-                      Choose image
-                      <input type="file" accept="image/*" onChange={handleProfileImageUpload} className="sr-only" />
-                    </label>
-                    {profileImage ? (
-                      <button type="button" onClick={() => setProfileImage(null)} className="bevel-button ml-2 border-2 border-[#202020] bg-[#d8dbe2] px-2 py-1">
-                        Clear
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            </Panel>
             <Panel title="NOW PLAYING">
               <div className="space-y-3">
                 <div className="grid grid-cols-[76px_minmax(0,1fr)] gap-2 border-2 border-[#202020] bg-[#f7f7f7] p-2">
@@ -614,7 +586,7 @@ export default function HomePage() {
           <div className="grid gap-3 border-2 border-[#202020] bg-[#f7f1f6] p-3 shadow-[4px_4px_0_rgba(230,74,160,0.45)] lg:grid-cols-[minmax(0,1fr)_280px]">
             <div className="min-w-0">
               <div className="ui-chrome-text text-[10px] font-bold uppercase text-[#4a4a4a]">music profile loaded</div>
-              <div className="display-wordmark mt-1 text-[30px] uppercase leading-none text-[#1746b8] md:text-[42px]">{musicProfile.userName.toUpperCase()} SOUNDROBE</div>
+              <div className="display-wordmark mt-1 text-[30px] uppercase leading-none text-[#1746b8] md:text-[42px]">{visibleProfileName.toUpperCase()} SOUNDROBE</div>
               <div className="mt-3 grid gap-2 text-[10px] font-bold uppercase md:grid-cols-2">
                 <div className="border-2 border-[#202020] bg-white px-2 py-1.5">
                   <span className="mr-2 text-[#6b6070]">Top music tags</span>
@@ -978,7 +950,7 @@ export default function HomePage() {
           <div className="grid gap-4 md:grid-cols-2">
             <Panel title="PIECES">
               <div className="grid gap-2">
-                {savedGarments.map((garmentId) => {
+                {savedGarments.length ? savedGarments.map((garmentId) => {
                   const garment = garments.find((entry) => entry.id === garmentId);
                   if (!garment) return null;
                   return (
@@ -995,13 +967,17 @@ export default function HomePage() {
                       <span>{garment.category}</span>
                     </button>
                   );
-                })}
+                }) : (
+                  <div className="border-2 border-[#202020] bg-[#f8f9fb] p-3 text-[10px] font-bold uppercase leading-4 text-[#5d5360]">
+                    No saved pieces yet. Open Soundrobe and save pieces you want to keep.
+                  </div>
+                )}
               </div>
             </Panel>
 
             <Panel title="LOOKS">
               <div className="grid gap-2">
-                {savedLooks.map((lookId) => {
+                {savedLooks.length ? savedLooks.map((lookId) => {
                   const look = lookPresets.find((entry) => entry.id === lookId) ?? defaultLook;
                   const lookName = savedLookNames[look.id] ?? look.name;
                   return (
@@ -1015,7 +991,11 @@ export default function HomePage() {
                       <span>{look.garmentIds.length} ITEMS</span>
                     </button>
                   );
-                })}
+                }) : (
+                  <div className="border-2 border-[#202020] bg-[#f8f9fb] p-3 text-[10px] font-bold uppercase leading-4 text-[#5d5360]">
+                    No saved looks yet. Build a look, rename it, then hit Save Look.
+                  </div>
+                )}
               </div>
             </Panel>
           </div>
@@ -1026,12 +1006,68 @@ export default function HomePage() {
     return (
       <div className="space-y-4 p-2 md:p-4">
         <Panel title="PROFILE">
-          <div className="grid gap-4 md:grid-cols-[160px_1fr]">
-            <div className="flex h-[160px] items-center justify-center border-2 border-[#303030] bg-[#d7d7d7] text-[#111111]">
-              <UserRound className="h-16 w-16" />
+          <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+            <div className="space-y-3">
+              <div className="relative flex aspect-square items-center justify-center overflow-hidden border-2 border-[#303030] bg-[#d7d7d7] text-[#111111]">
+                {profileImage ? (
+                  <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={profileImage}
+                      alt=""
+                      className="h-full w-full object-cover"
+                      style={{
+                        imageRendering: profilePixelation > 10 ? "pixelated" : "auto",
+                        filter: `contrast(${1 + profilePixelation / 240}) saturate(${1 + profilePixelation / 260})`,
+                      }}
+                    />
+                    <div
+                      className="pointer-events-none absolute inset-0"
+                      style={{
+                        backgroundImage: "linear-gradient(90deg, rgba(255,255,255,.22) 1px, transparent 1px), linear-gradient(180deg, rgba(0,0,0,.14) 1px, transparent 1px)",
+                        backgroundSize: `${Math.max(4, 18 - Math.round(profilePixelation / 8))}px ${Math.max(4, 18 - Math.round(profilePixelation / 8))}px`,
+                        opacity: profilePixelation / 140,
+                      }}
+                    />
+                  </>
+                ) : (
+                  <UserRound className="h-16 w-16" />
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="bevel-button cursor-pointer border-2 border-[#202020] bg-[#ffd3e8] px-2 py-1.5 text-center text-[10px] font-bold uppercase">
+                  Choose image
+                  <input type="file" accept="image/*" onChange={handleProfileImageUpload} className="sr-only" />
+                </label>
+                <button type="button" onClick={() => setProfileImage(null)} className="bevel-button border-2 border-[#202020] bg-[#d8dbe2] px-2 py-1.5 text-[10px] font-bold uppercase">
+                  Clear
+                </button>
+              </div>
             </div>
             <div className="space-y-3">
-              <div className="display-wordmark text-[27px] uppercase">{musicProfile.userName.toUpperCase()}</div>
+              <label className="block text-[9px] font-bold uppercase text-[#5d5360]">
+                Display name
+                <input
+                  value={visibleProfileName}
+                  onChange={(event) => setProfileDisplayName(event.target.value)}
+                  className="mt-1 block w-full border-2 border-[#202020] bg-white px-2 py-2 text-[18px] font-black uppercase text-[#111111] outline-none focus:bg-[#ffd3e8]"
+                />
+              </label>
+              <label className="block border-2 border-[#202020] bg-[#f8f9fb] p-2 text-[10px] font-bold uppercase">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span>Pixelate profile image</span>
+                  <span>{profilePixelation}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={profilePixelation}
+                  onChange={(event) => setProfilePixelation(Number(event.target.value))}
+                  className="soundrobe-slider w-full"
+                />
+              </label>
               <div className="space-y-2 text-[10px] font-bold uppercase">
                 <div>Top artists: {musicProfile.artists.slice(0, 3).map((artist) => artist.name).join(" / ")}</div>
                 <div>Primary eras: {musicProfile.eras.slice(0, 3).map((era) => era.name).join(" / ")}</div>
@@ -1100,9 +1136,8 @@ export default function HomePage() {
                     garment={garment}
                     isSelected={selectedGarmentId === garment.id}
                     onSelect={(entry) => {
-                      setSelectedGarmentId(entry.id);
                       setSelectedCategory(entry.category);
-                      setSavedGarments((previous) => (previous.includes(entry.id) ? previous : [...previous, entry.id]));
+                      toggleCurrentLookGarment(entry);
                     }}
                     onWhyThis={(entry) => setWhyThisGarmentId(entry.id)}
                   />
@@ -1117,10 +1152,42 @@ export default function HomePage() {
         {screen === "soundrobe" && (
           <div className="space-y-4 p-2 md:p-4">
             <Panel title="WARDROBE.EXE">
-              <div className="grid gap-4 xl:grid-cols-[150px_minmax(0,1fr)]">
-                <div className="paint-rail border-2 border-[#202020] p-2">
-                  <div className="mb-3 text-[10px] font-bold uppercase text-[#111111]">CATEGORY</div>
-                  <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
+              <div className="mb-4 border-2 border-[#202020] bg-[#f7f1f6] p-3">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                  <label className="block text-[9px] font-bold uppercase text-[#5d5360]">
+                    Look name
+                    <input
+                      value={currentLook.name}
+                      onChange={(event) => handleRenameLook(event.target.value)}
+                      className="mt-1 block w-full border-2 border-[#202020] bg-white px-2 py-2 text-[14px] font-bold uppercase text-[#111111] outline-none focus:bg-[#ffd3e8]"
+                    />
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="border-2 border-[#202020] bg-white px-3 py-2 text-[12px] font-bold uppercase">
+                      ${currentLook.garmentIds.reduce((sum, id) => sum + (garments.find((item) => item.id === id)?.price ?? 0), 0)}
+                    </div>
+                    <RetroButton onClick={handleRemix}>REMIX</RetroButton>
+                    <RetroButton onClick={handleSaveSelectedPiece}>SAVE PIECE</RetroButton>
+                    <RetroButton onClick={handleSaveLook}>SAVE LOOK</RetroButton>
+                    <RetroButton onClick={handleShopCurrentLook}>SHOP</RetroButton>
+                  </div>
+                </div>
+                <div className="text-fit mt-2 text-[10px] uppercase tracking-[0.08em] text-[#4d4d4d]">{currentLook.description}</div>
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+                <OutfitCanvas
+                  garments={currentLookGarments}
+                  selectedCategory={normalizedSelectedCategory}
+                  onSelectSlot={handleSelectOutfitSlot}
+                />
+
+                <div className="border-2 border-[#202020] bg-[#f3f3f3] p-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[10px] font-bold uppercase">ADD PIECES</div>
+                    <div className="text-[9px] font-bold uppercase text-[#5d5360]">Click to add or remove</div>
+                  </div>
+                  <div className="mb-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-2">
                     {categoryTabs.map((tab) => (
                       <button
                         key={tab.value}
@@ -1134,62 +1201,38 @@ export default function HomePage() {
                       </button>
                     ))}
                   </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="mb-2 text-[10px] font-bold uppercase text-[#4a4a4a]">{currentLook.name}</div>
-                  <OutfitCanvas
-                    garments={currentLookGarments}
-                    selectedCategory={normalizedSelectedCategory}
-                    onSelectSlot={handleSelectOutfitSlot}
-                  />
-                </div>
-
-              </div>
-
-              <div className="mt-4 grid gap-3 border-t-2 border-[#303030] pt-3 lg:grid-cols-[1fr_1.2fr]">
-                <div className="border-2 border-[#202020] bg-[#f3f3f3] p-2">
-                  <div className="mb-2 text-[10px] font-bold uppercase">ITEM TRAY</div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
                     {garments
                       .filter((garment) => garment.category === selectedCategory)
-                      .map((garment) => (
-                        <button
-                          key={garment.id}
-                          type="button"
-                          onClick={() => toggleCurrentLookGarment(garment)}
-                          className={`catalog-tile border-2 p-2 text-left text-[10px] font-bold uppercase ${
-                            selectedGarmentId === garment.id ? "border-[#e64aa0] bg-[#f7f1f6]" : "border-[#202020] bg-[#f8f8f8]"
-                          }`}
-                        >
-                          <div className="mb-2 flex h-20 items-center justify-center border-2 border-[#202020] bg-[#eef3fb]">
-                            <div className="catalog-cutout h-10 w-12 border-2 border-[#202020] bg-[#596247]" />
-                          </div>
-                          {garment.name}
-                        </button>
-                      ))}
-                  </div>
-                </div>
-
-                <div className="border-2 border-[#202020] bg-[#f7f1f6] p-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <label className="block text-[9px] font-bold uppercase text-[#5d5360]">
-                        Look name
-                        <input
-                          value={currentLook.name}
-                          onChange={(event) => handleRenameLook(event.target.value)}
-                          className="mt-1 block w-full border-2 border-[#202020] bg-white px-2 py-1 text-[11px] font-bold uppercase text-[#111111] outline-none focus:bg-[#ffd3e8]"
-                        />
-                      </label>
-                      <div className="text-fit mt-1 text-[10px] uppercase tracking-[0.08em] text-[#4d4d4d]">{currentLook.description}</div>
-                    </div>
-                    <div className="text-right text-[12px] font-bold uppercase">${currentLook.garmentIds.reduce((sum, id) => sum + (garments.find((item) => item.id === id)?.price ?? 0), 0)}</div>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <RetroButton onClick={handleRemix}>REMIX LOOK</RetroButton>
-                    <RetroButton onClick={handleSaveLook}>SAVE</RetroButton>
-                    <RetroButton onClick={handleShopCurrentLook}>SHOP PIECES</RetroButton>
+                      .map((garment) => {
+                        const isInLook = currentLook.garmentIds.includes(garment.id);
+                        return (
+                          <button
+                            key={garment.id}
+                            type="button"
+                            onClick={() => toggleCurrentLookGarment(garment)}
+                            className={`catalog-tile grid min-w-0 grid-cols-[72px_minmax(0,1fr)] gap-2 border-2 p-2 text-left text-[10px] font-bold uppercase ${
+                              isInLook ? "border-[#e64aa0] bg-[#f7f1f6]" : "border-[#202020] bg-[#f8f8f8]"
+                            }`}
+                          >
+                            <div className="flex h-[72px] items-center justify-center border-2 border-[#202020] bg-[#eef3fb]">
+                              {garment.image ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={garment.image} alt="" className="h-full w-full object-cover [image-rendering:pixelated]" />
+                              ) : (
+                                <div className="catalog-cutout h-9 w-11 border-2 border-[#202020] bg-[#596247]" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-fit leading-4">{garment.name}</div>
+                              <div className="mt-1 text-[9px] text-[#5d5360]">${garment.price}{garment.matchScore ? ` / ${garment.matchScore}%` : ""}</div>
+                              <div className="mt-1 inline-flex border border-[#202020] bg-white px-1 text-[8px]">
+                                {isInLook ? "IN LOOK" : "ADD"}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
                   </div>
                 </div>
               </div>

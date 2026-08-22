@@ -43,7 +43,7 @@ export function OutfitCanvas({
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-2 border-[#202020] bg-[#f8f9fb] px-3 py-2">
         <div>
           <div className="ui-chrome-text text-[10px] font-bold uppercase text-[#4e5666]">Outfit Preview</div>
-          <div className="text-[13px] font-bold uppercase text-[#151821]">Click worn pieces to remove. Add from the item tray.</div>
+          <div className="text-[13px] font-bold uppercase text-[#151821]">Click worn pieces to remove. Add pieces from signature picks.</div>
         </div>
         <div className="ui-chrome-text border-2 border-[#202020] bg-[#ffd3e8] px-2 py-1 text-[10px] font-bold uppercase">
           {visibleGarments.length} pieces
