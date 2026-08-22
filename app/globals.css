@@ -15,6 +15,8 @@
   --soundrobe-burgundy: #641f32;
   --soundrobe-cream: #d8c9ae;
   --soundrobe-gold: #b99146;
+  --cursor-default: url("/cursors/default-dark.png") 4 1, auto;
+  --cursor-pointer: url("/cursors/pointer.png") 4 1, pointer;
 }
 
 * {
@@ -32,12 +34,23 @@ body {
     linear-gradient(180deg, #9fc4f8 0%, #e5bfd8 45%, #bfc4cf 45% 100%);
   color: var(--soundrobe-black);
   font-family: Tahoma, Verdana, "Segoe UI", Arial, Helvetica, sans-serif;
+  font-weight: 700;
+  cursor: var(--cursor-default);
 }
 
 button,
 input,
 select {
   font: inherit;
+}
+
+button,
+a,
+label,
+input[type="range"],
+input[type="file"],
+[role="button"] {
+  cursor: var(--cursor-pointer);
 }
 
 .title-bar {

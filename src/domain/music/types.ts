@@ -19,6 +19,8 @@ export type TrackSignal = {
   tags?: string[];
   releaseYear?: number;
   imageUrl?: string;
+  previewUrl?: string;
+  externalUrl?: string;
   weight: number;
 };
 

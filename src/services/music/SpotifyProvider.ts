@@ -12,6 +12,8 @@ type SpotifyTrack = {
   name: string;
   artists: Array<{ id: string; name: string }>;
   album?: { name?: string; release_date?: string; images?: SpotifyImage[] };
+  preview_url?: string | null;
+  external_urls?: { spotify?: string };
 };
 
 type SpotifyTopResponse<T> = { items: T[] };
@@ -157,6 +159,8 @@ export class SpotifyProvider implements MusicProvider {
         tags: range.trackTagsById.get(track.id) ?? [],
         releaseYear: releaseYear(track.album?.release_date),
         imageUrl: bestImage(track.album?.images),
+        previewUrl: track.preview_url ?? undefined,
+        externalUrl: track.external_urls?.spotify,
         weight: 100 - index * 3,
       })),
     };

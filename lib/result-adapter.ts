@@ -114,6 +114,8 @@ export function adaptMusicProfile(result: SoundrobeResult): MusicProfile {
     tags: string[];
     releaseYear?: number;
     imageUrl?: string;
+    previewUrl?: string;
+    externalUrl?: string;
     score: number;
   }>();
   for (const { range, weight } of weightedRanges) {
@@ -125,6 +127,8 @@ export function adaptMusicProfile(result: SoundrobeResult): MusicProfile {
         tags: track.tags ?? [],
         releaseYear: track.releaseYear,
         imageUrl: track.imageUrl,
+        previewUrl: track.previewUrl,
+        externalUrl: track.externalUrl,
         score: 0,
       };
       current.score += track.weight * weight;
@@ -176,6 +180,8 @@ export function adaptMusicProfile(result: SoundrobeResult): MusicProfile {
       tags: track.tags ?? [],
       releaseYear: track.releaseYear,
       imageUrl: track.imageUrl,
+      previewUrl: track.previewUrl,
+      externalUrl: track.externalUrl,
       value: track.value,
     })),
     albums: normalizeScores(Array.from(albumScores.values()))

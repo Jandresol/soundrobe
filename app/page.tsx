@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
   UserRound,
@@ -58,10 +58,13 @@ export default function HomePage() {
   const [currentLook, setCurrentLook] = useState(fallbackLook);
   const [selectedGarmentId, setSelectedGarmentId] = useState<string>(fallbackLook.garmentIds[0]);
   const [nowPlayingIndex, setNowPlayingIndex] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     return window.localStorage.getItem("soundrobe-profile-image");
   });
+  const [pixelatedProfileImage, setPixelatedProfileImage] = useState<string | null>(null);
   const [profileDisplayName, setProfileDisplayName] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem("soundrobe-profile-name") ?? "";
@@ -116,7 +119,7 @@ export default function HomePage() {
     const track = musicProfile.tracks[nowPlayingIndex % Math.max(musicProfile.tracks.length, 1)];
     const genreLine = `${musicProfile.genres.slice(0, 4).map((genre) => genre.name).join(" // ")} //`;
     if (!track) {
-      return { title: genreLine, detail: "Top genre mix", progress: 62, imageUrl: undefined };
+      return { title: genreLine, detail: "Top genre mix", progress: 62, imageUrl: undefined, previewUrl: undefined, externalUrl: undefined };
     }
     const artistLine = track.artists.length ? track.artists.join(" / ") : "Top track";
     const progressSeed = Array.from(track.name).reduce((total, char) => total + char.charCodeAt(0), 0);
@@ -125,6 +128,8 @@ export default function HomePage() {
       detail: `${artistLine}${track.releaseYear ? ` // ${track.releaseYear}` : ""}`,
       progress: 34 + (progressSeed % 42),
       imageUrl: track.imageUrl,
+      previewUrl: track.previewUrl,
+      externalUrl: track.externalUrl,
     };
   }, [musicProfile, nowPlayingIndex]);
 
@@ -136,6 +141,12 @@ export default function HomePage() {
       .sort((a, b) => slotOrder.indexOf(a.category) - slotOrder.indexOf(b.category));
   }, [currentLook, garments]);
   const normalizedSelectedCategory = selectedSlotCategory === "shoes" ? "shoe" : selectedSlotCategory;
+
+  const handleSetNowPlayingIndex = (index: number) => {
+    audioRef.current?.pause();
+    setIsPreviewPlaying(false);
+    setNowPlayingIndex(index);
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -168,6 +179,43 @@ export default function HomePage() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("soundrobe-profile-pixelation", String(profilePixelation));
   }, [profilePixelation]);
+
+  useEffect(() => {
+    if (!profileImage) {
+      return;
+    }
+
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      const canvas = document.createElement("canvas");
+      const smallCanvas = document.createElement("canvas");
+      const size = 240;
+      const pixelSize = Math.max(12, Math.round(size - (profilePixelation / 100) * 212));
+      canvas.width = size;
+      canvas.height = size;
+      smallCanvas.width = pixelSize;
+      smallCanvas.height = pixelSize;
+      const context = canvas.getContext("2d");
+      const smallContext = smallCanvas.getContext("2d");
+      if (!context || !smallContext) return;
+
+      const sourceSize = Math.min(image.naturalWidth, image.naturalHeight);
+      const sourceX = (image.naturalWidth - sourceSize) / 2;
+      const sourceY = (image.naturalHeight - sourceSize) / 2;
+      smallContext.imageSmoothingEnabled = false;
+      smallContext.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, pixelSize, pixelSize);
+      context.imageSmoothingEnabled = false;
+      context.drawImage(smallCanvas, 0, 0, size, size);
+      setPixelatedProfileImage(canvas.toDataURL("image/png"));
+    };
+    image.src = profileImage;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profileImage, profilePixelation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -250,7 +298,7 @@ export default function HomePage() {
         if (cancelled) return;
         setFlowError(null);
         setSoundrobeResult(result);
-        setNowPlayingIndex(0);
+        handleSetNowPlayingIndex(0);
         setSpotifyConnected(result.metadata.musicSource === "spotify");
         setSpotifyMessage(result.metadata.musicSource === "spotify" ? "Using Spotify music profile" : "Using demo music profile");
         const nextLooks = adaptOutfits(result);
@@ -335,7 +383,7 @@ export default function HomePage() {
       const nextLooks = adaptOutfits(result);
       const nextGarments = adaptGarments(result);
       setSoundrobeResult(result);
-      setNowPlayingIndex(0);
+      handleSetNowPlayingIndex(0);
       const generatedLook = nextLooks[0] ?? { ...fallbackLook, id: "look-generated-empty", garmentIds: nextGarments.slice(0, 5).map((garment) => garment.id) };
       setCurrentLook(generatedLook);
       setSelectedGarmentId(nextGarments[0]?.id ?? generatedLook.garmentIds[0] ?? fallbackLook.garmentIds[0]);
@@ -377,7 +425,7 @@ export default function HomePage() {
     setSelectedCategory("top");
     setSelectedSlotCategory("outerwear");
     setSelectedGarmentId(defaultLook.garmentIds[0]);
-    setNowPlayingIndex(0);
+    handleSetNowPlayingIndex(0);
     setAnalysisProgress(12);
     setAnalysisIndex(0);
   };
@@ -431,7 +479,33 @@ export default function HomePage() {
 
   const handleSelectAlbum = (albumName: string) => {
     const trackIndex = musicProfile.tracks.findIndex((track) => track.albumName === albumName);
-    if (trackIndex >= 0) setNowPlayingIndex(trackIndex);
+    if (trackIndex >= 0) handleSetNowPlayingIndex(trackIndex);
+  };
+
+  const handleTogglePreview = () => {
+    if (!nowPlaying.previewUrl) {
+      if (nowPlaying.externalUrl) window.open(nowPlaying.externalUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    if (!audioRef.current || audioRef.current.src !== nowPlaying.previewUrl) {
+      audioRef.current?.pause();
+      audioRef.current = new Audio(nowPlaying.previewUrl);
+      audioRef.current.addEventListener("ended", () => setIsPreviewPlaying(false), { once: true });
+    }
+
+    if (isPreviewPlaying) {
+      audioRef.current.pause();
+      setIsPreviewPlaying(false);
+      return;
+    }
+
+    audioRef.current.play()
+      .then(() => setIsPreviewPlaying(true))
+      .catch(() => {
+        setIsPreviewPlaying(false);
+        if (nowPlaying.externalUrl) window.open(nowPlaying.externalUrl, "_blank", "noopener,noreferrer");
+      });
   };
 
   const handleShopCurrentLook = () => {
@@ -600,7 +674,7 @@ export default function HomePage() {
             </div>
             <div className="border-2 border-[#202020] bg-[#ececec] p-2 shadow-[3px_3px_0_rgba(32,32,32,0.22)]">
               <div className="mb-2 bg-[#151821] px-2 py-1 text-[9px] font-bold uppercase text-[#ffd3e8]">now playing</div>
-              <div className="grid grid-cols-[74px_minmax(0,1fr)] gap-2">
+                <div className="grid grid-cols-[74px_minmax(0,1fr)] gap-2">
                 <div className="flex h-[74px] items-center justify-center border-2 border-[#202020] bg-[#dfe7f5]">
                   <div
                     className="spinning-cd"
@@ -612,6 +686,13 @@ export default function HomePage() {
                   <div className="ticker-window bg-[#151821] px-2 py-1 text-[#ffd3e8]"><span className="marquee">{nowPlaying.title}</span></div>
                   <div className="truncate border-2 border-[#202020] bg-white px-2 py-1 text-[9px] text-[#303746]">{nowPlaying.detail}</div>
                   <div className="h-4 border-2 border-[#202020] bg-white p-[2px]"><div className="h-full bg-[#1746b8]" style={{ width: `${nowPlaying.progress}%` }} /></div>
+                  <button
+                    type="button"
+                    onClick={handleTogglePreview}
+                    className="bevel-button mt-1 border-2 border-[#202020] bg-[#ffd3e8] px-2 py-1 text-[9px] font-bold uppercase"
+                  >
+                    {nowPlaying.previewUrl ? (isPreviewPlaying ? "STOP PREVIEW" : "PLAY PREVIEW") : "OPEN SPOTIFY"}
+                  </button>
                 </div>
               </div>
             </div>
@@ -712,7 +793,7 @@ export default function HomePage() {
                   <button
                     key={`${track.name}-${track.artists.join("/")}`}
                     type="button"
-                    onClick={() => setNowPlayingIndex(index)}
+                    onClick={() => handleSetNowPlayingIndex(index)}
                     className="bevel-button grid min-w-0 grid-cols-[66px_minmax(0,1fr)] gap-2 border-2 border-[#202020] bg-[#f8f9fb] p-2 text-left"
                   >
                     <div className="flex h-[66px] items-center justify-center border-2 border-[#202020] bg-[#dfe7f5]">
@@ -1013,12 +1094,12 @@ export default function HomePage() {
                   <>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={profileImage}
+                      src={pixelatedProfileImage ?? profileImage}
                       alt=""
                       className="h-full w-full object-cover"
                       style={{
-                        imageRendering: profilePixelation > 10 ? "pixelated" : "auto",
-                        filter: `contrast(${1 + profilePixelation / 240}) saturate(${1 + profilePixelation / 260})`,
+                        imageRendering: "pixelated",
+                        filter: `contrast(${1 + profilePixelation / 320}) saturate(${1 + profilePixelation / 360})`,
                       }}
                     />
                     <div
@@ -1035,11 +1116,11 @@ export default function HomePage() {
                 )}
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <label className="bevel-button cursor-pointer border-2 border-[#202020] bg-[#ffd3e8] px-2 py-1.5 text-center text-[10px] font-bold uppercase">
+                <label className="bevel-button flex min-h-[34px] cursor-pointer items-center justify-center border-2 border-[#202020] bg-[#ffd3e8] px-2 py-1.5 text-center text-[10px] font-bold uppercase leading-none">
                   Choose image
                   <input type="file" accept="image/*" onChange={handleProfileImageUpload} className="sr-only" />
                 </label>
-                <button type="button" onClick={() => setProfileImage(null)} className="bevel-button border-2 border-[#202020] bg-[#d8dbe2] px-2 py-1.5 text-[10px] font-bold uppercase">
+                <button type="button" onClick={() => setProfileImage(null)} className="bevel-button flex min-h-[34px] items-center justify-center border-2 border-[#202020] bg-[#d8dbe2] px-2 py-1.5 text-[10px] font-bold uppercase leading-none">
                   Clear
                 </button>
               </div>
