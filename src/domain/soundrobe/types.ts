@@ -1,5 +1,6 @@
 import type { MusicProfile } from "@/src/domain/music/types";
 import type { ProductRecommendation } from "@/src/domain/commerce/types";
+import type { CommerceDiagnostics } from "@/src/services/commerce/CommerceProvider";
 import type { OutfitRecommendation } from "@/src/domain/outfit/types";
 import type { GarmentIntent, PaletteColor, ShoppingPreferences, StyleProfile, StyleThread } from "@/src/domain/style/types";
 
@@ -25,6 +26,7 @@ export type SoundrobeResult = {
         mediumTerm: number;
         shortTerm: number;
       };
+      commerce?: CommerceDiagnostics;
     };
   };
 };

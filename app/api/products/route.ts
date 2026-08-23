@@ -1,0 +1,31 @@
+import { NextRequest, NextResponse } from "next/server";
+import { listSupabaseProducts } from "@/src/repositories/supabaseProductSearchCache";
+
+const categoryMap: Record<string, string[]> = {
+  top: ["top"],
+  bottom: ["bottom"],
+  dress: ["dress"],
+  outerwear: ["outerwear"],
+  shoe: ["shoes"],
+  accessory: ["bag", "jewelry", "accessory"],
+};
+
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const category = searchParams.get("category") ?? "";
+  const categories = categoryMap[category] ?? [];
+  const offset = Number(searchParams.get("offset") ?? 0);
+  const limit = Number(searchParams.get("limit") ?? 24);
+
+  if (!categories.length) {
+    return NextResponse.json({ products: [] });
+  }
+
+  const products = await listSupabaseProducts({
+    categories,
+    offset: Number.isFinite(offset) ? offset : 0,
+    limit: Number.isFinite(limit) ? limit : 24,
+  });
+
+  return NextResponse.json({ products });
+}

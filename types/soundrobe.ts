@@ -1,6 +1,6 @@
 export type Screen = "home" | "analysis" | "dna" | "soundrobe" | "looks" | "closet" | "profile";
 
-export type Category = "top" | "bottom" | "outerwear" | "shoe" | "accessory";
+export type Category = "top" | "bottom" | "dress" | "outerwear" | "shoe" | "accessory";
 
 export type GenreWeight = {
   name: string;
@@ -61,6 +61,10 @@ export type Garment = {
   influences: string[];
   eras: string[];
   explanation: string;
+  garmentType?: string;
+  colors?: string[];
+  materials?: string[];
+  aesthetics?: string[];
   image?: string;
   brand?: string;
   retailer?: string;

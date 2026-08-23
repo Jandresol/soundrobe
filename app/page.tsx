@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Play,
   UserRound,
@@ -11,7 +11,8 @@ import { OutfitCanvas } from "@/components/ui/OutfitCanvas";
 import { Panel } from "@/components/ui/Panel";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { RetroButton } from "@/components/ui/RetroButton";
-import { adaptGarments, adaptMusicProfile, adaptOutfits, adaptStyleProfile } from "@/lib/result-adapter";
+import { adaptGarments, adaptAllSignatureGarments, adaptMusicProfile, adaptOutfits, adaptStyleProfile, garmentFromProduct } from "@/lib/result-adapter";
+import type { ProductCandidate } from "@/src/domain/commerce/types";
 import { defaultLook as fallbackLook, garments as fallbackGarments, lookPresets as fallbackLooks, musicProfile as fallbackMusicProfile, styleProfile as fallbackStyleProfile } from "@/lib/mock-data";
 import type { SoundrobeResult } from "@/src/domain/soundrobe/types";
 import type { Category, Garment, Outfit, Screen } from "@/types/soundrobe";
@@ -27,10 +28,27 @@ const tabs: Array<{ label: string; value: Screen }> = [
 const categoryTabs: Array<{ label: string; value: Category }> = [
   { label: "TOPS", value: "top" },
   { label: "BOTTOMS", value: "bottom" },
+  { label: "DRESSES", value: "dress" },
   { label: "OUTERWEAR", value: "outerwear" },
   { label: "SHOES", value: "shoe" },
   { label: "ACCESSORIES", value: "accessory" },
 ];
+
+const signatureCategoryOrder: Category[] = ["outerwear", "top", "bottom", "dress", "shoe", "accessory"];
+const catalogFetchBatchSize = 1;
+const catalogSearchLimitPerCategory = 1;
+const emptyCatalogSearchCounts = (): Record<Category, number> => ({
+  top: 0,
+  bottom: 0,
+  dress: 0,
+  outerwear: 0,
+  shoe: 0,
+  accessory: 0,
+});
+
+function catalogSearchStorageKey(userId: string) {
+  return `soundrobe-catalog-searches:v1:${userId}`;
+}
 
 const analysisSteps = [
   "READING MUSIC PROFILE",
@@ -43,6 +61,155 @@ const analysisSteps = [
   "ASSEMBLING LOOKS",
 ];
 
+const defaultTimeWeights = { longTerm: 50, mediumTerm: 30, shortTerm: 20 };
+const soundrobeCacheVersion = "v5";
+const soundrobeCacheTtlMs = 24 * 60 * 60 * 1000;
+const placeholderPalettes: Record<Category, string[]> = {
+  top: ["#151821", "#e64aa0", "#ffd3e8"],
+  bottom: ["#202020", "#7b6aa8", "#d8dbe2"],
+  dress: ["#241627", "#7b6aa8", "#ffd3e8"],
+  outerwear: ["#111111", "#641f32", "#b99146"],
+  shoe: ["#151821", "#6f7684", "#ffffff"],
+  accessory: ["#3a2631", "#b99146", "#ffd3e8"],
+};
+
+type CachedSoundrobeResult = {
+  cachedAt: number;
+  source: "spotify" | "demo";
+  userId: string;
+  weights: typeof defaultTimeWeights;
+  result: SoundrobeResult;
+};
+
+function weightsKey(weights: typeof defaultTimeWeights) {
+  return `${weights.longTerm}-${weights.mediumTerm}-${weights.shortTerm}`;
+}
+
+function cacheIndexKey(source: "spotify" | "demo") {
+  return `soundrobe-result:${soundrobeCacheVersion}:${source}:latest`;
+}
+
+function cacheResultKey(source: "spotify" | "demo", userId: string, weights: typeof defaultTimeWeights) {
+  return `soundrobe-result:${soundrobeCacheVersion}:${source}:${userId}:${weightsKey(weights)}`;
+}
+
+function sortByMatchScore(garments: Garment[]) {
+  return [...garments].sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
+}
+
+function filterGarmentsByTag(garments: Garment[], tagId: string | null) {
+  if (!tagId) return garments;
+  return garments.filter((garment) => garmentMatchesTag(garment, tagId));
+}
+
+function placeholderBackground(category: Category) {
+  const colors = placeholderPalettes[category];
+  return `
+    radial-gradient(circle at 18% 18%, rgba(255,255,255,0.38) 0 2px, transparent 2px 8px),
+    linear-gradient(135deg, ${colors[0]} 0%, ${colors[1]} 56%, ${colors[2]} 100%)
+  `;
+}
+
+function buildRecommendationBubbles(garments: Garment[]) {
+  const counts = new Map<string, number>();
+  const add = (prefix: string, values?: string[]) => {
+    for (const value of values ?? []) {
+      const normalized = value.toLowerCase().trim();
+      if (!normalized) continue;
+      counts.set(`${prefix}:${normalized}`, (counts.get(`${prefix}:${normalized}`) ?? 0) + 1);
+    }
+  };
+
+  for (const garment of garments) {
+    add("color", garment.colors);
+    add("material", garment.materials);
+    add("style", garment.aesthetics);
+  }
+
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([id, count]) => {
+      const [kind, value] = id.split(":");
+      return { id, label: bubbleLabel(kind, value), count };
+    });
+}
+
+function bubbleLabel(kind: string, value: string) {
+  if (kind === "color") return `more ${value}`;
+  if (kind === "material") return `more ${value}`;
+  return `more ${value}`;
+}
+
+function garmentMatchesTag(garment: Garment, tagId: string) {
+  const [, value] = tagId.split(":");
+  const tags = [
+    ...(garment.colors ?? []),
+    ...(garment.materials ?? []),
+    ...(garment.aesthetics ?? []),
+    garment.garmentType,
+  ].filter((tag): tag is string => Boolean(tag)).map((tag) => tag.toLowerCase());
+  return tags.includes(value);
+}
+
+function recommendationTagForGarment(garment: Garment) {
+  const tag =
+    garment.aesthetics?.[0] ? `style:${garment.aesthetics[0].toLowerCase()}` :
+    garment.colors?.[0] ? `color:${garment.colors[0].toLowerCase()}` :
+    garment.materials?.[0] ? `material:${garment.materials[0].toLowerCase()}` :
+    null;
+  return tag;
+}
+
+function readCachedSoundrobe(source: "spotify" | "demo", weights: typeof defaultTimeWeights) {
+  if (typeof window === "undefined") return null;
+  try {
+    const latestKey = window.localStorage.getItem(cacheIndexKey(source));
+    if (!latestKey) return null;
+    const cached = JSON.parse(window.localStorage.getItem(latestKey) ?? "null") as CachedSoundrobeResult | null;
+    if (!cached || cached.source !== source || weightsKey(cached.weights) !== weightsKey(weights)) return null;
+    if (Date.now() - cached.cachedAt > soundrobeCacheTtlMs) return null;
+    return cached.result;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedSoundrobe(result: SoundrobeResult, weights: typeof defaultTimeWeights) {
+  if (typeof window === "undefined") return;
+  const source = result.metadata.musicSource;
+  const key = cacheResultKey(source, result.user.id, weights);
+  const payload: CachedSoundrobeResult = {
+    cachedAt: Date.now(),
+    source,
+    userId: result.user.id,
+    weights,
+    result,
+  };
+  window.localStorage.setItem(key, JSON.stringify(payload));
+  window.localStorage.setItem(cacheIndexKey(source), key);
+}
+
+const reasonSourceLabels: Record<string, string> = {
+  "garment type": "Garment type matched",
+  color: "Color matched",
+  material: "Material matched",
+  silhouette: "Silhouette matched",
+  aesthetic: "Style mood matched",
+  era: "Era matched",
+  "style engine": "Music priority",
+  commerce: "Available now",
+  "shopping preferences": "Budget fit",
+};
+
+function formatMatchReason(reason: { signal: string; source: string; contribution: number }) {
+  const label = reasonSourceLabels[reason.source] ?? reason.source;
+  if (reason.source === "commerce") return { label, detail: reason.signal.replaceAll("_", " ") };
+  if (reason.source === "style engine") return { label, detail: "strong source signal" };
+  if (reason.source === "shopping preferences") return { label, detail: reason.signal };
+  return { label, detail: reason.signal };
+}
+
 export default function HomePage() {
   const [screen, setScreen] = useState<Screen>("home");
   const [soundrobeResult, setSoundrobeResult] = useState<SoundrobeResult | null>(null);
@@ -50,7 +217,7 @@ export default function HomePage() {
   const [spotifyMessage, setSpotifyMessage] = useState("Demo music ready");
   const [flowError, setFlowError] = useState<string | null>(null);
   const [analysisMusicSource, setAnalysisMusicSource] = useState<"spotify" | "demo">("demo");
-  const [timeWeights, setTimeWeights] = useState({ longTerm: 50, mediumTerm: 30, shortTerm: 20 });
+  const [timeWeights, setTimeWeights] = useState(defaultTimeWeights);
   const [analysisIndex, setAnalysisIndex] = useState(0);
   const [analysisProgress, setAnalysisProgress] = useState(12);
   const [selectedCategory, setSelectedCategory] = useState<Category>("top");
@@ -90,12 +257,63 @@ export default function HomePage() {
     return names ? JSON.parse(names) as Record<string, string> : {};
   });
   const [whyThisGarmentId, setWhyThisGarmentId] = useState<string | null>(null);
+  const [dismissedGarmentIds, setDismissedGarmentIds] = useState<string[]>([]);
+  const [, setFeedbackReasons] = useState<Record<string, string>>({});
+  const [catalogGarments, setCatalogGarments] = useState<Garment[]>([]);
+  const [catalogOffsets, setCatalogOffsets] = useState<Record<Category, number>>({ top: 0, bottom: 0, dress: 0, outerwear: 0, shoe: 0, accessory: 0 });
+  const [activeProductTag, setActiveProductTag] = useState<string | null>(null);
+  const [signatureSlotByCategory, setSignatureSlotByCategory] = useState<Partial<Record<Category, string>>>({});
+  const [hiddenSignatureCategories, setHiddenSignatureCategories] = useState<Category[]>([]);
+  const [catalogSearchCounts, setCatalogSearchCounts] = useState<Record<Category, number>>(emptyCatalogSearchCounts);
 
-  const garments = useMemo(() => soundrobeResult ? adaptGarments(soundrobeResult) : fallbackGarments, [soundrobeResult]);
+  const baseGarments = useMemo(() => soundrobeResult ? adaptGarments(soundrobeResult) : fallbackGarments, [soundrobeResult]);
+  const garments = useMemo(() => {
+    const byId = new Map<string, Garment>();
+    for (const garment of baseGarments) byId.set(garment.id, garment);
+    for (const garment of catalogGarments) byId.set(garment.id, garment);
+    for (const id of dismissedGarmentIds) byId.delete(id);
+    return Array.from(byId.values());
+  }, [baseGarments, catalogGarments, dismissedGarmentIds]);
   const lookPresets = useMemo(() => soundrobeResult ? adaptOutfits(soundrobeResult) : fallbackLooks, [soundrobeResult]);
   const defaultLook = lookPresets[0] ?? fallbackLook;
   const musicProfile = useMemo(() => soundrobeResult ? adaptMusicProfile(soundrobeResult) : fallbackMusicProfile, [soundrobeResult]);
   const styleProfile = useMemo(() => soundrobeResult ? adaptStyleProfile(soundrobeResult) : fallbackStyleProfile, [soundrobeResult]);
+  const rawSignatureGarments = useMemo(() => {
+    return soundrobeResult ? adaptAllSignatureGarments(soundrobeResult) : sortByMatchScore(garments);
+  }, [soundrobeResult, garments]);
+  const allSignatureGarments = useMemo(() => {
+    const dismissed = new Set(dismissedGarmentIds);
+    return rawSignatureGarments.filter((garment) => !dismissed.has(garment.id));
+  }, [rawSignatureGarments, dismissedGarmentIds]);
+  const defaultSignatureByCategory = useMemo(() => {
+    const map = new Map<Category, Garment>();
+    for (const garment of allSignatureGarments) {
+      if (!map.has(garment.category)) map.set(garment.category, garment);
+    }
+    return map;
+  }, [allSignatureGarments]);
+  const signatureGarments = useMemo(() => {
+    const hidden = new Set(hiddenSignatureCategories);
+    return signatureCategoryOrder
+      .filter((category) => !hidden.has(category))
+      .map((category) => {
+        const slotId = signatureSlotByCategory[category];
+        if (slotId) {
+          const slotted = allSignatureGarments.find((entry) => entry.id === slotId)
+            ?? garments.find((entry) => entry.id === slotId);
+          if (slotted) return slotted;
+        }
+        return defaultSignatureByCategory.get(category);
+      })
+      .filter((garment): garment is Garment => Boolean(garment));
+  }, [allSignatureGarments, garments, defaultSignatureByCategory, hiddenSignatureCategories, signatureSlotByCategory]);
+  const wardrobeByCategory = useMemo(() => {
+    const grouped = new Map<Category, Garment[]>();
+    for (const tab of categoryTabs) {
+      grouped.set(tab.value, sortByMatchScore(garments.filter((garment) => garment.category === tab.value)));
+    }
+    return grouped;
+  }, [garments]);
   const visibleProfileName = profileDisplayName.trim() || (soundrobeResult ? musicProfile.userName : "Your Soundrobe");
   const appliedTimeWeights = soundrobeResult?.metadata.diagnostics?.timeWeights ?? { longTerm: 0.5, mediumTerm: 0.3, shortTerm: 0.2 };
   const displayedAppliedWeights = {
@@ -134,19 +352,74 @@ export default function HomePage() {
   }, [musicProfile, nowPlayingIndex]);
 
   const currentLookGarments = useMemo(() => {
-    const slotOrder: Array<Category> = ["outerwear", "top", "bottom", "shoe", "accessory"];
-    return currentLook.garmentIds
-      .map((id) => garments.find((garment) => garment.id === id))
-      .filter((garment): garment is Garment => Boolean(garment))
-      .sort((a, b) => slotOrder.indexOf(a.category) - slotOrder.indexOf(b.category));
+    const slotOrder: Array<Category> = ["outerwear", "dress", "top", "bottom", "shoe", "accessory"];
+    const byCategory = new Map<Category, Garment>();
+    for (const id of currentLook.garmentIds) {
+      const garment = garments.find((item) => item.id === id);
+      if (garment) byCategory.set(garment.category, garment);
+    }
+    return slotOrder.map((category) => byCategory.get(category)).filter((garment): garment is Garment => Boolean(garment));
   }, [currentLook, garments]);
+  const selectedCategoryGarments = useMemo(
+    () => wardrobeByCategory.get(selectedCategory) ?? [],
+    [wardrobeByCategory, selectedCategory],
+  );
+  const selectedCategoryFilteredGarments = useMemo(
+    () => filterGarmentsByTag(selectedCategoryGarments, activeProductTag),
+    [activeProductTag, selectedCategoryGarments],
+  );
+  const recommendationBubbles = useMemo(
+    () => buildRecommendationBubbles(selectedCategoryGarments),
+    [selectedCategoryGarments],
+  );
   const normalizedSelectedCategory = selectedSlotCategory === "shoes" ? "shoe" : selectedSlotCategory;
+  const catalogSearchesUsed = useMemo(
+    () => Object.values(catalogSearchCounts).reduce((total, count) => total + count, 0),
+    [catalogSearchCounts],
+  );
+  const selectedCategorySearchUsed = (catalogSearchCounts[selectedCategory] ?? 0) >= catalogSearchLimitPerCategory;
 
-  const handleSetNowPlayingIndex = (index: number) => {
+  useEffect(() => {
+    const userId = soundrobeResult?.user.id;
+    if (!userId || typeof window === "undefined") return;
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(catalogSearchStorageKey(userId)) ?? "null") as Partial<Record<Category, number>> | null;
+      setCatalogSearchCounts({ ...emptyCatalogSearchCounts(), ...saved });
+    } catch {
+      setCatalogSearchCounts(emptyCatalogSearchCounts());
+    }
+  }, [soundrobeResult?.user.id]);
+
+  useEffect(() => {
+    const userId = soundrobeResult?.user.id;
+    if (!userId || typeof window === "undefined") return;
+    window.localStorage.setItem(catalogSearchStorageKey(userId), JSON.stringify(catalogSearchCounts));
+  }, [catalogSearchCounts, soundrobeResult?.user.id]);
+
+  const handleSetNowPlayingIndex = useCallback((index: number) => {
     audioRef.current?.pause();
     setIsPreviewPlaying(false);
     setNowPlayingIndex(index);
-  };
+  }, []);
+
+  const applySoundrobeResult = useCallback((result: SoundrobeResult, message?: string) => {
+    const nextLooks = adaptOutfits(result);
+    const nextGarments = adaptGarments(result);
+    const generatedLook = nextLooks[0] ?? { ...fallbackLook, id: "look-generated-empty", garmentIds: nextGarments.slice(0, 5).map((garment) => garment.id) };
+    setFlowError(null);
+    setSoundrobeResult(result);
+    handleSetNowPlayingIndex(0);
+    setSpotifyConnected(result.metadata.musicSource === "spotify");
+    setSpotifyMessage(message ?? (result.metadata.musicSource === "spotify" ? "Using Spotify music profile" : "Using demo music profile"));
+    setCurrentLook(generatedLook);
+    setSelectedGarmentId(nextGarments[0]?.id ?? generatedLook.garmentIds[0] ?? fallbackLook.garmentIds[0]);
+    setSelectedCategory("top");
+    setSelectedSlotCategory("outerwear");
+    setDismissedGarmentIds([]);
+    setSignatureSlotByCategory({});
+    setHiddenSignatureCategories([]);
+    setActiveProductTag(null);
+  }, [handleSetNowPlayingIndex]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -283,6 +556,17 @@ export default function HomePage() {
           setAnalysisProgress(Math.round(((index + 1) / analysisSteps.length) * 100));
           await new Promise((resolve) => setTimeout(resolve, 120));
         }
+
+        const cachedResult = readCachedSoundrobe(analysisMusicSource, timeWeights);
+        if (cachedResult) {
+          if (cancelled) return;
+          applySoundrobeResult(cachedResult, `Loaded cached ${analysisMusicSource === "spotify" ? "Spotify" : "demo"} Soundrobe`);
+          setAnalysisIndex(analysisSteps.length - 1);
+          setAnalysisProgress(100);
+          setScreen("dna");
+          return;
+        }
+
         const params = new URLSearchParams({
           music: analysisMusicSource,
           longTerm: String(timeWeights.longTerm),
@@ -296,16 +580,8 @@ export default function HomePage() {
         }
         const result = await response.json() as SoundrobeResult;
         if (cancelled) return;
-        setFlowError(null);
-        setSoundrobeResult(result);
-        handleSetNowPlayingIndex(0);
-        setSpotifyConnected(result.metadata.musicSource === "spotify");
-        setSpotifyMessage(result.metadata.musicSource === "spotify" ? "Using Spotify music profile" : "Using demo music profile");
-        const nextLooks = adaptOutfits(result);
-        const nextGarments = adaptGarments(result);
-        const generatedLook = nextLooks[0] ?? { ...fallbackLook, id: "look-generated-empty", garmentIds: nextGarments.slice(0, 5).map((garment) => garment.id) };
-        setCurrentLook(generatedLook);
-        setSelectedGarmentId(nextGarments[0]?.id ?? generatedLook.garmentIds[0] ?? fallbackLook.garmentIds[0]);
+        writeCachedSoundrobe(result, timeWeights);
+        applySoundrobeResult(result);
         setAnalysisIndex(analysisSteps.length - 1);
         setAnalysisProgress(100);
         setScreen("soundrobe");
@@ -323,7 +599,7 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [analysisMusicSource, screen, timeWeights]);
+  }, [analysisMusicSource, applySoundrobeResult, screen, timeWeights]);
 
   const handleDemoStart = () => {
     setFlowError(null);
@@ -380,16 +656,8 @@ export default function HomePage() {
         throw new Error(payload?.error ?? `Soundrobe rebuild failed: ${response.status}`);
       }
       const result = await response.json() as SoundrobeResult;
-      const nextLooks = adaptOutfits(result);
-      const nextGarments = adaptGarments(result);
-      setSoundrobeResult(result);
-      handleSetNowPlayingIndex(0);
-      const generatedLook = nextLooks[0] ?? { ...fallbackLook, id: "look-generated-empty", garmentIds: nextGarments.slice(0, 5).map((garment) => garment.id) };
-      setCurrentLook(generatedLook);
-      setSelectedGarmentId(nextGarments[0]?.id ?? generatedLook.garmentIds[0] ?? fallbackLook.garmentIds[0]);
-      setSelectedCategory("top");
-      setSelectedSlotCategory("outerwear");
-      setSpotifyMessage("Fashion mix rebuilt from cached music");
+      writeCachedSoundrobe(result, timeWeights);
+      applySoundrobeResult(result, "Fashion mix rebuilt from cached music");
     } catch (error) {
       setSpotifyMessage(error instanceof Error ? error.message : "Could not rebuild fashion mix");
     }
@@ -431,30 +699,223 @@ export default function HomePage() {
   };
 
   const toggleCurrentLookGarment = (garment: Garment) => {
+    setSelectedCategory(garment.category);
+    setSelectedSlotCategory(garment.category);
     setCurrentLook((previous) => {
-      const exists = previous.garmentIds.includes(garment.id);
-      const garmentIds = exists
-        ? previous.garmentIds.filter((id) => id !== garment.id)
-        : [...previous.garmentIds, garment.id];
-      return { ...previous, garmentIds };
+      const resolveGarment = (id: string) => garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
+      const categoryInLookId = previous.garmentIds.find((id) => resolveGarment(id)?.category === garment.category);
+      if (categoryInLookId) {
+        return { ...previous, garmentIds: previous.garmentIds.filter((id) => id !== categoryInLookId) };
+      }
+      const withoutSameCategory = previous.garmentIds.filter((id) => resolveGarment(id)?.category !== garment.category);
+      return { ...previous, garmentIds: [...withoutSameCategory, garment.id] };
     });
     setSelectedGarmentId(garment.id);
   };
 
   const removeCurrentLookGarment = (garmentId: string) => {
     setCurrentLook((previous) => ({ ...previous, garmentIds: previous.garmentIds.filter((id) => id !== garmentId) }));
+    setSelectedGarmentId((current) => (current === garmentId ? "" : current));
+  };
+
+  const pickNextGarment = (
+    pool: Garment[],
+    currentGarmentId: string | undefined,
+    occupiedIds: Set<string>,
+  ) => {
+    const currentIndex = currentGarmentId
+      ? Math.max(0, pool.findIndex((garment) => garment.id === currentGarmentId))
+      : -1;
+    return pool.find((garment, index) => index > currentIndex && !occupiedIds.has(garment.id))
+      ?? pool.find((garment) => !occupiedIds.has(garment.id))
+      ?? (currentIndex >= 0 ? pool[(currentIndex + 1) % pool.length] : pool[0]);
+  };
+
+  const cycleCurrentLookCategory = (category: Category, currentGarmentId?: string) => {
+    setSelectedCategory(category);
+    setSelectedSlotCategory(category);
+    const categoryPool = filterGarmentsByTag(wardrobeByCategory.get(category) ?? [], activeProductTag);
+    if (!categoryPool.length) return;
+
+    setCurrentLook((previous) => {
+      const occupied = new Set(previous.garmentIds);
+      if (currentGarmentId) occupied.delete(currentGarmentId);
+      const next = pickNextGarment(categoryPool, currentGarmentId, occupied);
+      if (!next) return previous;
+      setSelectedGarmentId(next.id);
+
+      if (currentGarmentId && previous.garmentIds.includes(currentGarmentId)) {
+        const withoutDuplicate = previous.garmentIds.filter((id) => id !== next.id || id === currentGarmentId);
+        return {
+          ...previous,
+          garmentIds: withoutDuplicate.map((id) => (id === currentGarmentId ? next.id : id)),
+          description: "",
+        };
+      }
+
+      const existingSameCategory = previous.garmentIds.find((id) => {
+        const garment = garments.find((item) => item.id === id);
+        return garment?.category === category;
+      });
+
+      if (existingSameCategory) {
+        return {
+          ...previous,
+          garmentIds: previous.garmentIds.map((id) => (id === existingSameCategory ? next.id : id)),
+          description: "",
+        };
+      }
+
+      return { ...previous, garmentIds: [...previous.garmentIds, next.id], description: "" };
+    });
+  };
+
+  const fetchCatalogOptions = async (category: Category) => {
+    const offset = catalogOffsets[category] ?? 0;
+    const params = new URLSearchParams({
+      category,
+      offset: String(offset),
+      limit: "24",
+    });
+    const response = await fetch(`/api/products?${params.toString()}`, { cache: "no-store" });
+    if (!response.ok) return [] as Garment[];
+    const payload = await response.json() as { products?: ProductCandidate[] };
+    const nextGarments = (payload.products ?? []).map(garmentFromProduct);
+    setCatalogOffsets((previous) => ({ ...previous, [category]: offset + nextGarments.length }));
+    setCatalogGarments((previous) => {
+      const byId = new Map(previous.map((garment) => [garment.id, garment]));
+      for (const garment of nextGarments) byId.set(garment.id, garment);
+      return Array.from(byId.values());
+    });
+    return nextGarments;
+  };
+
+  const loadMoreCategoryOptions = async (category: Category) => {
+    setSelectedCategory(category);
+    setSelectedSlotCategory(category);
+    const fetched = await fetchCatalogOptions(category);
+    const newest = fetched.find((garment) => garment.category === category);
+    if (newest) setSelectedGarmentId(newest.id);
+  };
+
+  const handleFindNextSignatureOption = (garment: Garment) => {
+    const category = garment.category;
+    const pool = sortByMatchScore(allSignatureGarments.filter((entry) => entry.category === category));
+    if (pool.length <= 1) return;
+
+    const currentId = signatureSlotByCategory[category] ?? garment.id;
+    const currentIndex = pool.findIndex((entry) => entry.id === currentId);
+    const next = pool.find((entry, index) => index > currentIndex)
+      ?? pool.find((entry) => entry.id !== currentId);
+    if (!next || next.id === currentId) return;
+
+    setSignatureSlotByCategory((previous) => ({ ...previous, [category]: next.id }));
+    setSelectedCategory(category);
+    setSelectedSlotCategory(category);
+    setSelectedGarmentId(next.id);
+    setCurrentLook((previous) => {
+      const resolveGarment = (id: string) => garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
+      const hasCategoryInLook = previous.garmentIds.some((id) => resolveGarment(id)?.category === category);
+      if (!hasCategoryInLook) return previous;
+      const withoutCategory = previous.garmentIds.filter((id) => resolveGarment(id)?.category !== category);
+      return { ...previous, garmentIds: [...withoutCategory, next.id], description: "" };
+    });
+  };
+
+  const handleSaveGarment = (garment: Garment) => {
+    setDismissedGarmentIds((previous) => previous.filter((id) => id !== garment.id));
+    setSavedGarments((previous) => (previous.includes(garment.id) ? previous : [...previous, garment.id]));
+    setSelectedGarmentId(garment.id);
+  };
+
+  const handleMoreLikeThis = (garment: Garment) => {
+    const tag = recommendationTagForGarment(garment);
+    setSelectedCategory(garment.category);
+    setSelectedSlotCategory(garment.category);
+    if (tag) setActiveProductTag(tag);
+    setDismissedGarmentIds((previous) => previous.filter((id) => id !== garment.id));
+    setSelectedGarmentId(garment.id);
+    setCurrentLook((previous) => {
+      if (previous.garmentIds.includes(garment.id)) return previous;
+      const withoutSameCategory = previous.garmentIds.filter((id) => {
+        const existing = garments.find((item) => item.id === id);
+        return existing?.category !== garment.category;
+      });
+      return { ...previous, garmentIds: [...withoutSameCategory, garment.id], description: "" };
+    });
+  };
+
+  const handleDismissSignatureGarment = (garment: Garment, reason?: string) => {
+    if (reason && reason !== "Skip") setFeedbackReasons((previous) => ({ ...previous, [garment.id]: reason }));
+    const category = garment.category;
+    const nextDismissed = dismissedGarmentIds.includes(garment.id)
+      ? dismissedGarmentIds
+      : [...dismissedGarmentIds, garment.id];
+    const nextPool = sortByMatchScore(
+      rawSignatureGarments.filter((entry) => entry.category === category && !nextDismissed.includes(entry.id)),
+    );
+
+    setDismissedGarmentIds(nextDismissed);
+    setSavedGarments((previous) => previous.filter((id) => id !== garment.id));
+    setCurrentLook((previous) => {
+      const resolveGarment = (id: string) => garments.find((item) => item.id === id) ?? rawSignatureGarments.find((item) => item.id === id);
+      return {
+        ...previous,
+        garmentIds: previous.garmentIds.filter((id) => resolveGarment(id)?.category !== category),
+        description: "",
+      };
+    });
+    setWhyThisGarmentId((current) => (current === garment.id ? null : current));
+    setSelectedCategory(category);
+    setSelectedSlotCategory(category);
+
+    if (nextPool.length) {
+      setHiddenSignatureCategories((previous) => previous.filter((entry) => entry !== category));
+      setSignatureSlotByCategory((previous) => ({ ...previous, [category]: nextPool[0].id }));
+      setSelectedGarmentId(nextPool[0].id);
+      return;
+    }
+
+    setSignatureSlotByCategory((previous) => {
+      const next = { ...previous };
+      delete next[category];
+      return next;
+    });
+    setHiddenSignatureCategories((previous) => (previous.includes(category) ? previous : [...previous, category]));
+    setSelectedGarmentId((current) => (current === garment.id ? "" : current));
+  };
+
+  const handleNotForMe = (garment: Garment) => {
+    handleDismissSignatureGarment(garment);
   };
 
   const handleRemix = () => {
-    setCurrentLook((previous) => ({
-      ...previous,
-      garmentIds: previous.garmentIds.map((id, index) => {
-        if (index > 1) return id;
+    setCurrentLook((previous) => {
+      const existing = new Set(previous.garmentIds);
+      const nextGarmentIds = [...previous.garmentIds];
+      let replacements = 0;
+
+      for (const [index, id] of previous.garmentIds.entries()) {
+        if (replacements >= 2) break;
         const current = garments.find((garment) => garment.id === id);
-        const replacement = garments.find((garment) => garment.category === current?.category && garment.id !== id);
-        return replacement?.id ?? id;
-      }),
-    }));
+        if (!current) continue;
+        const categoryPool = garments.filter((garment) => garment.category === current.category && !existing.has(garment.id));
+        if (!categoryPool.length) continue;
+        const replacement = categoryPool[(index + replacements) % categoryPool.length];
+        existing.delete(id);
+        existing.add(replacement.id);
+        nextGarmentIds[index] = replacement.id;
+        replacements += 1;
+      }
+
+      return {
+        ...previous,
+        id: `${previous.id}-remix-${Date.now()}`,
+        name: previous.name.includes("REMIX") ? previous.name : `${previous.name} REMIX`,
+        garmentIds: nextGarmentIds,
+        description: "",
+      };
+    });
   };
 
   const handleSaveLook = () => {
@@ -521,10 +982,9 @@ export default function HomePage() {
     const normalized = category === "shoes" ? "shoe" : category;
     setSelectedSlotCategory(normalized);
     setSelectedGarmentId(garmentId);
-    if (["top", "bottom", "outerwear", "shoe", "accessory"].includes(normalized)) {
+    if (["top", "bottom", "dress", "outerwear", "shoe", "accessory"].includes(normalized)) {
       setSelectedCategory(normalized as Category);
     }
-    removeCurrentLookGarment(garmentId);
   };
 
   const renderScreen = () => {
@@ -868,6 +1328,12 @@ export default function HomePage() {
           <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
             <Panel title="CORE TASTE / CURRENT ROTATION">
               <div className="space-y-3 text-[11px] font-bold uppercase">
+                <div className="border-2 border-[#202020] bg-[#ffd3e8] p-2">
+                  <div className="text-[13px] font-bold uppercase text-[#111111]">Tune the mix</div>
+                  <div className="mt-1 text-[10px] normal-case leading-4 tracking-[0.02em] text-[#303746]">
+                    Balance archive taste, seasonal favorites, and recent plays. Rebuild to apply the new weighting.
+                  </div>
+                </div>
                 {[
                   { key: "longTerm" as const, label: "ARCHIVE", description: "years-deep taste" },
                   { key: "mediumTerm" as const, label: "SEASON", description: "last few months" },
@@ -1210,20 +1676,41 @@ export default function HomePage() {
         {screen === "soundrobe" && (
           <div className="space-y-4 p-2 md:p-4">
             <Panel title="SIGNATURE PIECES">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {garments.slice(0, 8).map((garment) => (
-                  <GarmentCard
-                    key={garment.id}
-                    garment={garment}
-                    isSelected={selectedGarmentId === garment.id}
-                    onSelect={(entry) => {
-                      setSelectedCategory(entry.category);
-                      toggleCurrentLookGarment(entry);
-                    }}
-                    onWhyThis={(entry) => setWhyThisGarmentId(entry.id)}
-                  />
-                ))}
-              </div>
+              {signatureGarments.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  {signatureGarments.map((garment) => (
+                    <GarmentCard
+                      key={`signature-${garment.category}`}
+                      garment={garment}
+                      isSelected={selectedGarmentId === garment.id}
+                      isInLook={currentLook.garmentIds.some((id) => {
+                        const inLook = garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
+                        return inLook?.category === garment.category;
+                      })}
+                      isSaved={savedGarments.includes(garment.id)}
+                      actionLabel={currentLook.garmentIds.some((id) => {
+                        const inLook = garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
+                        return inLook?.category === garment.category;
+                      }) ? "REMOVE" : "ADD"}
+                      onSelect={(entry) => {
+                        setSelectedCategory(entry.category);
+                        setSelectedSlotCategory(entry.category);
+                        toggleCurrentLookGarment(entry);
+                      }}
+                      onSave={handleSaveGarment}
+                      onWhyThis={(entry) => setWhyThisGarmentId(entry.id)}
+                      onNextOption={handleFindNextSignatureOption}
+                      showNextOption
+                      onMoreLikeThis={handleMoreLikeThis}
+                      onNotForMe={handleNotForMe}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="border-2 border-[#202020] bg-[#fff7fb] p-4 text-[12px] font-bold uppercase leading-relaxed text-[#3a2631]">
+                  No live product matches yet. Soundrobe will use cached SerpAPI results when available and leave empty spots instead of mixing in demo catalog pieces.
+                </div>
+              )}
             </Panel>
           </div>
         )}
@@ -1247,13 +1734,16 @@ export default function HomePage() {
                     <div className="border-2 border-[#202020] bg-white px-3 py-2 text-[12px] font-bold uppercase">
                       ${currentLook.garmentIds.reduce((sum, id) => sum + (garments.find((item) => item.id === id)?.price ?? 0), 0)}
                     </div>
+                    <RetroButton variant="secondary" onClick={() => setScreen("dna")}>TUNE MUSIC DNA</RetroButton>
                     <RetroButton onClick={handleRemix}>REMIX</RetroButton>
                     <RetroButton onClick={handleSaveSelectedPiece}>SAVE PIECE</RetroButton>
                     <RetroButton onClick={handleSaveLook}>SAVE LOOK</RetroButton>
                     <RetroButton onClick={handleShopCurrentLook}>SHOP</RetroButton>
                   </div>
                 </div>
-                <div className="text-fit mt-2 text-[10px] uppercase tracking-[0.08em] text-[#4d4d4d]">{currentLook.description}</div>
+                {currentLook.description ? (
+                  <div className="text-fit mt-2 text-[10px] uppercase tracking-[0.08em] text-[#4d4d4d]">{currentLook.description}</div>
+                ) : null}
               </div>
 
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
@@ -1261,19 +1751,27 @@ export default function HomePage() {
                   garments={currentLookGarments}
                   selectedCategory={normalizedSelectedCategory}
                   onSelectSlot={handleSelectOutfitSlot}
+                  onRemoveGarment={removeCurrentLookGarment}
+                  onCycleCategory={cycleCurrentLookCategory}
                 />
 
                 <div className="border-2 border-[#202020] bg-[#f3f3f3] p-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="text-[10px] font-bold uppercase">ADD PIECES</div>
-                    <div className="text-[9px] font-bold uppercase text-[#5d5360]">Click to add or remove</div>
+                    <div className="text-[9px] font-bold uppercase text-[#5d5360]">
+                      {selectedCategoryFilteredGarments.length} in {categoryTabs.find((tab) => tab.value === selectedCategory)?.label.toLowerCase() ?? "category"}
+                    </div>
                   </div>
                   <div className="mb-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-2">
                     {categoryTabs.map((tab) => (
                       <button
                         key={tab.value}
                         type="button"
-                        onClick={() => setSelectedCategory(tab.value)}
+                        onClick={() => {
+                          setSelectedCategory(tab.value);
+                          setSelectedSlotCategory(tab.value);
+                          setActiveProductTag(null);
+                        }}
                         className={`bevel-button min-h-8 whitespace-normal border-2 px-2 py-1.5 text-center text-[9px] font-bold uppercase leading-3 ${
                           selectedCategory === tab.value ? "border-[#202020] bg-[#ffd3e8] text-[#111111]" : "border-[#202020] bg-[#f4f4f4] text-[#111111]"
                         }`}
@@ -1282,10 +1780,41 @@ export default function HomePage() {
                       </button>
                     ))}
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                    {garments
-                      .filter((garment) => garment.category === selectedCategory)
-                      .map((garment) => {
+                  {recommendationBubbles.length ? (
+                    <div className="mb-3 flex flex-wrap gap-1.5 border-2 border-[#202020] bg-white p-2">
+                      {recommendationBubbles.map((bubble) => (
+                        <button
+                          key={bubble.id}
+                          type="button"
+                          onClick={() => setActiveProductTag((current) => current === bubble.id ? null : bubble.id)}
+                          className={`bevel-button border border-[#202020] px-2 py-1 text-[9px] font-bold uppercase ${
+                            activeProductTag === bubble.id ? "bg-[#ffd3e8] text-[#111111]" : "bg-[#f4f4f4] text-[#303746]"
+                          }`}
+                        >
+                          {bubble.label}
+                        </button>
+                      ))}
+                      {activeProductTag ? (
+                        <button
+                          type="button"
+                          onClick={() => setActiveProductTag(null)}
+                          className="bevel-button border border-[#202020] bg-[#d8dbe2] px-2 py-1 text-[9px] font-bold uppercase"
+                        >
+                          clear
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => loadMoreCategoryOptions(selectedCategory)}
+                    className="bevel-button mb-3 w-full border-2 border-[#202020] bg-[#ffd3e8] px-3 py-2 text-[10px] font-bold uppercase"
+                  >
+                    + Add next {categoryTabs.find((tab) => tab.value === selectedCategory)?.label.toLowerCase() ?? "pieces"}
+                  </button>
+                  <div className="max-h-[420px] overflow-y-auto pr-1">
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                      {selectedCategoryFilteredGarments.length ? selectedCategoryFilteredGarments.map((garment) => {
                         const isInLook = currentLook.garmentIds.includes(garment.id);
                         return (
                           <button
@@ -1294,14 +1823,21 @@ export default function HomePage() {
                             onClick={() => toggleCurrentLookGarment(garment)}
                             className={`catalog-tile grid min-w-0 grid-cols-[72px_minmax(0,1fr)] gap-2 border-2 p-2 text-left text-[10px] font-bold uppercase ${
                               isInLook ? "border-[#e64aa0] bg-[#f7f1f6]" : "border-[#202020] bg-[#f8f8f8]"
-                            }`}
+                            } ${selectedGarmentId === garment.id ? "outline outline-2 outline-[#ffd3e8]" : ""}`}
                           >
-                            <div className="flex h-[72px] items-center justify-center border-2 border-[#202020] bg-[#eef3fb]">
+                            <div className="flex h-[72px] items-center justify-center border-2 border-[#202020] bg-[#eef3fb] p-1">
                               {garment.image ? (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={garment.image} alt="" className="h-full w-full object-cover [image-rendering:pixelated]" />
+                                <img src={garment.image} alt="" className="h-full w-full object-contain [image-rendering:pixelated]" />
                               ) : (
-                                <div className="catalog-cutout h-9 w-11 border-2 border-[#202020] bg-[#596247]" />
+                                <div
+                                  className="flex h-full w-full items-end justify-start border border-[#202020] p-1"
+                                  style={{ background: placeholderBackground(garment.category) }}
+                                >
+                                  <span className="border border-[#202020] bg-white px-1 text-[8px] text-[#151821]">
+                                    {garment.category}
+                                  </span>
+                                </div>
                               )}
                             </div>
                             <div className="min-w-0">
@@ -1313,7 +1849,12 @@ export default function HomePage() {
                             </div>
                           </button>
                         );
-                      })}
+                      }) : (
+                        <div className="border-2 border-dashed border-[#6f7684] bg-white p-3 text-[10px] font-bold uppercase text-[#5d5360]">
+                          No {categoryTabs.find((tab) => tab.value === selectedCategory)?.label.toLowerCase() ?? "pieces"} yet. Load more to expand your wardrobe.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1363,6 +1904,27 @@ export default function HomePage() {
                   {modalGarment.explanation}
                 </p>
               </div>
+              {modalGarment.matchReasons?.length ? (
+                <div className="space-y-2">
+                  <div className="text-[#4d4d4d]">MATCH BREAKDOWN</div>
+                  <div className="grid gap-1.5">
+                    {modalGarment.matchReasons.map((reason, index) => {
+                      const formatted = formatMatchReason(reason);
+                      return (
+                        <div key={`${reason.source}-${reason.signal}-${index}`} className="grid grid-cols-[minmax(0,1fr)_42px] gap-2 border-2 border-[#202020] bg-[#f8f8f8] p-2">
+                          <div className="min-w-0">
+                            <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#111111]">{formatted.label}</div>
+                            <div className="mt-0.5 text-[10px] normal-case tracking-[0.02em] text-[#4d4d4d]">{formatted.detail}</div>
+                          </div>
+                          <div className="flex items-center justify-center border-2 border-[#202020] bg-white text-[11px] font-bold">
+                            +{reason.contribution}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               <div className="flex justify-end">
                 <RetroButton onClick={() => setWhyThisGarmentId(null)}>OK</RetroButton>
               </div>

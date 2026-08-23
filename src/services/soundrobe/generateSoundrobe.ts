@@ -1,4 +1,5 @@
 import type { SoundrobeResult } from "@/src/domain/soundrobe/types";
+import type { ProductRecommendation } from "@/src/domain/commerce/types";
 import type { MusicProfile } from "@/src/domain/music/types";
 import type { ShoppingPreferences } from "@/src/domain/style/types";
 import { combineTimeRanges, type MusicTimeWeights } from "@/src/engine/music/combineTimeRanges";
@@ -42,10 +43,10 @@ export async function generateSoundrobeFromMusicProfile(
   const albumPalette = await extractAlbumPalette(weightedMusicProfile, timeWeights);
   const palette = generatePalette(styleProfile, albumPalette);
   const garmentIntents = generateGarmentIntents(styleProfile, palette);
-  const uniqueIntents = Array.from(new Map(garmentIntents.map((intent) => [intent.searchQuery, intent])).values());
-  const candidatesByIntent = await Promise.all(uniqueIntents.map(async (intent) => ({ intent, candidates: await commerceProvider.search(intent).catch(() => []) })));
+  const candidatesByIntent = await searchCommerceOncePerKey(garmentIntents, commerceProvider);
   const rankedProducts = rankProducts(candidatesByIntent, preferences);
   const outfits = assembleOutfits(rankedProducts);
+  const signaturePieces = selectSignaturePieces(rankedProducts, 48);
   return {
     user: { id: weightedMusicProfile.id, displayName: weightedMusicProfile.displayName },
     musicProfile: weightedMusicProfile,
@@ -53,7 +54,7 @@ export async function generateSoundrobeFromMusicProfile(
     styleThread,
     palette,
     garmentIntents,
-    signaturePieces: rankedProducts.slice(0, 8),
+    signaturePieces,
     outfits,
     metadata: {
       musicSource,
@@ -66,7 +67,50 @@ export async function generateSoundrobeFromMusicProfile(
           .flatMap((range) => range.artists)
           .filter((artist) => artist.genres.length > 0).length,
         timeWeights,
+        commerce: commerceProvider.diagnostics?.(),
       },
     },
   };
+}
+
+async function searchCommerceOncePerKey(garmentIntents: ReturnType<typeof generateGarmentIntents>, commerceProvider: CommerceProvider) {
+  const groups = new Map<string, ReturnType<typeof generateGarmentIntents>>();
+  for (const intent of garmentIntents) {
+    const key = commerceProvider.searchKey?.(intent) ?? intent.searchQuery.toLowerCase().replace(/\s+/g, " ").trim();
+    groups.set(key, [...(groups.get(key) ?? []), intent]);
+  }
+
+  const searchedGroups = await Promise.all(Array.from(groups.values()).map(async (intents) => {
+    const anchorIntent = intents[0];
+    const candidates = await commerceProvider.search(anchorIntent).catch(() => []);
+    return intents.map((intent) => ({ intent, candidates }));
+  }));
+
+  return searchedGroups.flat();
+}
+
+function selectSignaturePieces(rankedProducts: ProductRecommendation[], limit: number) {
+  const selected: ProductRecommendation[] = [];
+  const seenProducts = new Set<string>();
+  const seenCategories = new Set<string>();
+  const seenIntents = new Set<string>();
+
+  const add = (recommendation: ProductRecommendation) => {
+    if (selected.length >= limit || seenProducts.has(recommendation.product.id)) return false;
+    selected.push(recommendation);
+    seenProducts.add(recommendation.product.id);
+    seenCategories.add(recommendation.intent.category);
+    seenIntents.add(recommendation.intent.id);
+    return true;
+  };
+
+  for (const recommendation of rankedProducts) {
+    if (!seenCategories.has(recommendation.intent.category)) add(recommendation);
+  }
+  for (const recommendation of rankedProducts) {
+    if (!seenIntents.has(recommendation.intent.id)) add(recommendation);
+  }
+  for (const recommendation of rankedProducts) add(recommendation);
+
+  return selected;
 }

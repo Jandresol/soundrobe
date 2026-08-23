@@ -1,4 +1,4 @@
-import type { ProductRecommendation } from "@/src/domain/commerce/types";
+import type { ProductCandidate, ProductRecommendation } from "@/src/domain/commerce/types";
 import type { OutfitRecommendation } from "@/src/domain/outfit/types";
 import type { SoundrobeResult } from "@/src/domain/soundrobe/types";
 import type { Category, Garment, MusicProfile, Outfit, StyleProfile } from "@/types/soundrobe";
@@ -6,7 +6,7 @@ import type { Category, Garment, MusicProfile, Outfit, StyleProfile } from "@/ty
 const categoryMap: Record<string, Category> = {
   top: "top",
   bottom: "bottom",
-  dress: "top",
+  dress: "dress",
   outerwear: "outerwear",
   shoes: "shoe",
   bag: "accessory",
@@ -36,6 +36,18 @@ const moodTagIds = new Set([
   "ballad",
 ]);
 
+const colorWords = [
+  "black", "white", "cream", "ivory", "brown", "camel", "tan", "chocolate", "burgundy", "red", "pink", "blue", "navy", "green", "silver", "gold", "gray", "grey", "purple", "lilac", "yellow", "orange",
+];
+
+const materialWords = [
+  "denim", "leather", "suede", "satin", "silk", "mesh", "cotton", "linen", "knit", "rib knit", "wool", "nylon", "canvas", "velvet", "lace", "metallic",
+];
+
+const aestheticWords = [
+  "structured", "tailored", "oversized", "cropped", "fitted", "relaxed", "sleek", "glossy", "romantic", "sporty", "minimal", "classic", "western", "club", "grunge", "preppy", "bohemian", "playful",
+];
+
 export function garmentFromRecommendation(recommendation: ProductRecommendation): Garment {
   const product = recommendation.product;
   const influences = recommendation.intent.musicSources.slice(0, 3).map((source) => source.label);
@@ -47,7 +59,11 @@ export function garmentFromRecommendation(recommendation: ProductRecommendation)
     price: product.price,
     influences: influences.length ? influences : recommendation.intent.aesthetics.slice(0, 3),
     eras: recommendation.intent.eras,
-    explanation: recommendation.reasons.map((reason) => `${reason.source}: ${reason.signal} +${reason.contribution}`).join(" / "),
+    explanation: buildRecommendationExplanation(recommendation),
+    garmentType: product.attributes.garmentType ?? recommendation.intent.garmentType,
+    colors: ensureTags(product.attributes.colors, product.title, colorWords),
+    materials: ensureTags(product.attributes.materials, product.title, materialWords),
+    aesthetics: ensureTags(product.attributes.aesthetics, product.title, aestheticWords),
     image: product.imageUrl,
     brand: product.brand,
     retailer: product.retailer,
@@ -55,6 +71,51 @@ export function garmentFromRecommendation(recommendation: ProductRecommendation)
     matchScore: recommendation.score,
     matchReasons: recommendation.reasons,
   };
+}
+
+export function garmentFromProduct(product: ProductCandidate): Garment {
+  const resolvedCategory = product.attributes.category ?? "accessory";
+  const aesthetics = ensureTags(product.attributes.aesthetics, product.title, aestheticWords);
+  return {
+    id: product.id,
+    name: product.title,
+    category: categoryMap[resolvedCategory] ?? "accessory",
+    price: product.price,
+    influences: aesthetics.slice(0, 3),
+    eras: product.attributes.eras ?? [],
+    explanation: `${product.title} is a cached catalog option from ${product.retailer}.`,
+    garmentType: product.attributes.garmentType,
+    colors: ensureTags(product.attributes.colors, product.title, colorWords),
+    materials: ensureTags(product.attributes.materials, product.title, materialWords),
+    aesthetics,
+    image: product.imageUrl,
+    brand: product.brand,
+    retailer: product.retailer,
+    productUrl: product.productUrl,
+  };
+}
+
+function ensureTags(existing: string[] | undefined, title: string, dictionary: string[]) {
+  const tags = new Set((existing ?? []).filter(Boolean).map((tag) => tag.toLowerCase()));
+  const normalized = title.toLowerCase();
+  for (const tag of dictionary) {
+    if (normalized.includes(tag)) tags.add(tag);
+  }
+  return Array.from(tags);
+}
+
+function buildRecommendationExplanation(recommendation: ProductRecommendation) {
+  const reasons = recommendation.reasons;
+  const garment = reasons.find((reason) => reason.source === "garment type")?.signal ?? recommendation.intent.garmentType;
+  const color = reasons.find((reason) => reason.source === "color")?.signal;
+  const material = reasons.find((reason) => reason.source === "material")?.signal;
+  const influences = recommendation.intent.musicSources.slice(0, 2).map((source) => source.label);
+  const parts = [
+    color ? `${color} color` : undefined,
+    material ? `${material} texture` : undefined,
+    garment ? `${garment} shape` : undefined,
+  ].filter(Boolean);
+  return `${recommendation.product.title} matches the ${parts.join(", ")} in this mix${influences.length ? `, with signal from ${influences.join(" and ")}` : ""}.`;
 }
 
 export function adaptGarments(result: SoundrobeResult): Garment[] {
@@ -67,8 +128,8 @@ export function adaptGarments(result: SoundrobeResult): Garment[] {
 export function adaptOutfits(result: SoundrobeResult): Outfit[] {
   const outfits = result.outfits.map((outfit: OutfitRecommendation) => ({
     id: outfit.id,
-    name: `${outfit.name} - ${outfit.score}% MATCH`,
-    description: outfit.products.map((entry) => entry.product.title).join(" / "),
+    name: outfit.name,
+    description: "",
     garmentIds: outfit.products.map((entry) => entry.product.id),
   }));
   if (outfits.length) return outfits;
@@ -81,7 +142,7 @@ export function adaptOutfits(result: SoundrobeResult): Outfit[] {
   return garmentIds.length ? [{
     id: "look-generated",
     name: "LOOK 01",
-    description: products.filter((entry) => garmentIds.includes(entry.product.id)).map((entry) => entry.product.title).join(" / "),
+    description: "",
     garmentIds,
   }] : [];
 }
@@ -203,12 +264,32 @@ function normalizeScores<T extends { score: number }>(items: T[]) {
     .sort((a, b) => b.value - a.value);
 }
 
+export function selectDiverseGarments(garments: Garment[]): Garment[] {
+  const byCategory = new Map<Category, Garment>();
+  for (const garment of garments) {
+    if (!byCategory.has(garment.category)) byCategory.set(garment.category, garment);
+  }
+  return signatureDisplayOrder
+    .map((category) => byCategory.get(category))
+    .filter((garment): garment is Garment => Boolean(garment));
+}
+
+const signatureDisplayOrder: Category[] = ["outerwear", "top", "bottom", "dress", "shoe", "accessory"];
+
+export function adaptAllSignatureGarments(result: SoundrobeResult): Garment[] {
+  return result.signaturePieces.map(garmentFromRecommendation);
+}
+
+export function adaptSignaturePieces(result: SoundrobeResult): Garment[] {
+  return selectDiverseGarments(adaptAllSignatureGarments(result));
+}
+
 export function adaptStyleProfile(result: SoundrobeResult): StyleProfile {
   return {
     styleThread: result.styleThread.description,
     palette: result.palette,
     fashionSignals: result.styleProfile.traits.slice(0, 6).map((signal) => ({ name: signal.label, value: signal.weight })),
-    signaturePieces: adaptGarments(result).slice(0, 8),
+    signaturePieces: adaptSignaturePieces(result),
   };
 }
 

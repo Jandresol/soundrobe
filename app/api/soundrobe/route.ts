@@ -3,6 +3,7 @@ import { AwinCommerceProvider } from "@/src/services/commerce/AwinCommerceProvid
 import { DemoCommerceProvider } from "@/src/services/commerce/DemoCommerceProvider";
 import type { CommerceProvider } from "@/src/services/commerce/CommerceProvider";
 import { SerpApiCommerceProvider } from "@/src/services/commerce/SerpApiCommerceProvider";
+import { TestCatalogCommerceProvider } from "@/src/services/commerce/TestCatalogCommerceProvider";
 import type { MusicTimeWeights } from "@/src/engine/music/combineTimeRanges";
 import { DemoMusicProvider } from "@/src/services/music/DemoMusicProvider";
 import type { MusicProfile } from "@/src/domain/music/types";
@@ -109,6 +110,9 @@ function commerceProviderForRequest(preferences = { maxPrice: 250 }): CommercePr
   }
   if (process.env.COMMERCE_PROVIDER === "serpapi" && process.env.SERPAPI_API_KEY) {
     return new SerpApiCommerceProvider(process.env.SERPAPI_API_KEY, preferences);
+  }
+  if (process.env.COMMERCE_PROVIDER === "test_catalog") {
+    return new TestCatalogCommerceProvider(preferences);
   }
   return new DemoCommerceProvider(preferences);
 }
