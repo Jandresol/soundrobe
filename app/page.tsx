@@ -51,7 +51,7 @@ const analysisSteps = [
 ];
 
 const defaultTimeWeights = { longTerm: 50, mediumTerm: 30, shortTerm: 20 };
-const soundrobeCacheVersion = "v12";
+const soundrobeCacheVersion = "v13";
 const soundrobeCacheTtlMs = 24 * 60 * 60 * 1000;
 const placeholderPalettes: Record<Category, string[]> = {
   top: ["#151821", "#e64aa0", "#ffd3e8"],

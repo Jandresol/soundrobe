@@ -42,6 +42,7 @@ void (async () => {
   await timeWeightTest();
   genreEraInteractionTest();
   sceneLevelFashionMapTest();
+  balancedDiscoRnbAccentTest();
   singleSignalTest();
   mixedSignalTest();
   multiIntentShoeTest();
@@ -152,6 +153,16 @@ function sceneLevelFashionMapTest() {
   assert(shoegaze.garmentTypes.some((signal) => ["oversized knit", "soft camisole", "maxi skirt", "mary janes", "ballet flats"].includes(signal.id)), "shoegaze/dream-pop produces soft hazy garments");
   assert(riot.garmentTypes.some((signal) => ["graphic baby tee", "band tee", "slip dress", "combat boots", "flannel shirt"].includes(signal.id)), "riot grrrl/90s alternative gets DIY alt pieces");
   assert(indieSleaze.garmentTypes.some((signal) => ["low-rise jeans", "leather pants", "moto jacket", "skinny scarf"].includes(signal.id)), "indie sleaze keeps downtown 2000s pieces");
+}
+
+function balancedDiscoRnbAccentTest() {
+  const balanced = styleForGenres(["pop", "r&b", "soul", "funk", "disco", "club", "femme", "sensual", "queer", "experimental", "riot-grrrl"], ["1980s", "2020s"]);
+  const garmentTypes = labels(balanced.garmentTypes, 10);
+  const materials = labels(balanced.materials, 8);
+  assert(garmentTypes.some((garment) => ["satin cowl top", "statement flared trouser", "pointed leather boots", "fitted leather jacket"].includes(garment)), "balanced disco/R&B profile keeps nightlife-polish garments");
+  assert(materials.some((material) => ["satin", "metallic", "leather", "rib knit"].includes(material)), "balanced disco/R&B profile keeps polished materials");
+  assert(!garmentTypes.slice(0, 4).includes("graphic baby tee"), "riot/femme accent tags do not make graphic baby tee the lead top for balanced disco/R&B");
+  assert(!garmentTypes.slice(0, 6).includes("slip dress"), "goth/riot dress language does not dominate balanced disco/R&B");
 }
 
 function singleSignalTest() {

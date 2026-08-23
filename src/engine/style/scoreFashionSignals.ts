@@ -77,7 +77,8 @@ export function scoreFashionSignals(genres: WeightedSignal[], eras: WeightedSign
         const baseWeight = (hasEraSpecificMatch && !association.eras?.length) || (hasSceneSpecificMatch && genericRockAssociationIds.has(association.id))
           ? genre.weight * 0.34
           : genre.weight;
-        apply(association, baseWeight, { kind: "genre", id: genre.id, label: genre.label, weight: baseWeight });
+        const contextualWeight = baseWeight * associationContextMultiplier(association, genre, genres);
+        apply(association, contextualWeight, { kind: "genre", id: genre.id, label: genre.label, weight: contextualWeight });
       }
     }
     if (!matched) {
@@ -103,4 +104,33 @@ export function scoreFashionSignals(genres: WeightedSignal[], eras: WeightedSign
     return Array.from(map.values()).map((signal) => ({ ...signal, weight: Math.round((signal.weight / max) * 100) })).sort((a, b) => b.weight - a.weight);
   };
   return { buckets: Object.fromEntries(Object.entries(buckets).map(([key, map]) => [key, normalize(map)])) as Record<Bucket, WeightedSignal[]>, sourcesBySignal };
+}
+
+function associationContextMultiplier(association: FashionAssociation, genre: WeightedSignal, genres: WeightedSignal[]) {
+  const id = genre.id.toLowerCase();
+  const hasStrongAltRockContext = genres.some((signal) =>
+    ["alternative rock", "rock", "punk", "hard rock", "riot-grrrl", "riot grrrl"].includes(signal.id) &&
+    signal.weight >= 34
+  );
+  const hasStrongDiscoRnbContext = genres.some((signal) =>
+    ["disco", "funk", "soul", "r&b", "contemporary r&b", "club"].includes(signal.id) &&
+    signal.weight >= 45
+  );
+
+  if (
+    ["scene-riot-grrrl-90s-alt", "lastfm-feminist-riot", "lastfm-gothic", "lastfm-dark"].includes(association.id) &&
+    !hasStrongAltRockContext
+  ) {
+    return hasStrongDiscoRnbContext ? 0.18 : 0.36;
+  }
+
+  if (
+    ["femme", "queer", "experimental", "feminist", "gothic", "riot-grrrl", "riot grrrl"].includes(id) &&
+    hasStrongDiscoRnbContext &&
+    !hasStrongAltRockContext
+  ) {
+    return 0.42;
+  }
+
+  return 1;
 }
