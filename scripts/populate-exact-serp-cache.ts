@@ -12,8 +12,8 @@ const apiKey = process.env.SERPAPI_API_KEY;
 if (!apiKey) throw new Error("SERPAPI_API_KEY is missing.");
 
 const searches = [
-  intent("dress", "mini dress", ["black"], ["satin"], ["nightlife", "polished", "dramatic"], "womenswear satin cowl neck mini dress black"),
-  intent("dress", "lace slip dress", ["black"], ["lace"], ["grunge", "riot-grrrl", "femme alternative"], "womenswear black lace slip dress grunge"),
+  intent("top", "satin cowl top", ["black"], ["satin"], ["nightlife", "polished", "dramatic"], "womenswear black satin cowl neck top"),
+  intent("top", "asymmetric fitted top", ["plum", "burgundy"], ["rib knit"], ["sensual", "offbeat", "polished"], "womenswear plum asymmetric fitted top"),
 ];
 
 async function main() {
