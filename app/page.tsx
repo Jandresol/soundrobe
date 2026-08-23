@@ -1022,27 +1022,48 @@ const garments = useMemo(() => {
       setCatalogLoading(true);
 
       try {
-        const params = new URLSearchParams({
-          limit: "100",
-          offset: "0",
-        });
+        const categories: Category[] = [
+          "top",
+          "bottom",
+          "dress",
+          "outerwear",
+          "shoe",
+          "accessory",
+        ];
 
-        const response = await fetch(`/api/products?${params.toString()}`, {
-          cache: "no-store",
-        });
+        const responses = await Promise.all(
+          categories.map((category) => {
+            const params = new URLSearchParams({
+              category,
+              offset: "0",
+              limit: "24",
+            });
 
-        if (!response.ok) {
-          throw new Error(`Products request failed: ${response.status}`);
-        }
+            return fetch(`/api/products?${params.toString()}`, {
+              cache: "no-store",
+            });
+          })
+        );
 
-        const payload = await response.json() as {
-          products?: ProductCandidate[];
-        };
+        const payloads = await Promise.all(
+          responses.map(async (response) => {
+            if (!response.ok) {
+              throw new Error(`Products request failed: ${response.status}`);
+            }
+
+            return response.json() as Promise<{
+              products?: ProductCandidate[];
+            }>;
+          })
+        );
 
         if (cancelled) return;
 
-        const realGarments = (payload.products ?? []).map(garmentFromProduct);
+        const products = payloads.flatMap(
+          (payload) => payload.products ?? []
+        );
 
+        const realGarments = products.map(garmentFromProduct);
         setCatalogGarments(realGarments);
         setCatalogLoadedForUser(userId);
 
