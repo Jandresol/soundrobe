@@ -58,7 +58,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const commerceProvider = commerceProviderForRequest({ maxPrice: 250 });
   const body = await request.json().catch(() => null) as {
     musicProfile?: MusicProfile;
     musicSource?: "spotify" | "demo";
@@ -72,7 +71,7 @@ export async function POST(request: NextRequest) {
   const timeWeights = normalizeTimeWeights(body.timeWeights);
   const result = await generateSoundrobeFromMusicProfile(
     body.musicProfile,
-    commerceProvider,
+    noSearchCommerceProvider(),
     { maxPrice: 250 },
     body.musicSource ?? "demo",
     timeWeights,
@@ -115,6 +114,22 @@ function commerceProviderForRequest(preferences = { maxPrice: 250 }): CommercePr
     return new TestCatalogCommerceProvider(preferences);
   }
   return new DemoCommerceProvider(preferences);
+}
+
+function noSearchCommerceProvider(): CommerceProvider {
+  return {
+    source: "demo",
+    searchKey: (intent) => intent.searchQuery.toLowerCase().replace(/\s+/g, " ").trim(),
+    search: async () => [],
+    diagnostics: () => ({
+      provider: "music-rebuild-only",
+      cacheHits: 0,
+      cacheMisses: 0,
+      liveSearches: 0,
+      skippedByLimit: 0,
+      queries: [],
+    }),
+  };
 }
 
 function normalizeTimeWeights(weights?: MusicTimeWeights): MusicTimeWeights | undefined {

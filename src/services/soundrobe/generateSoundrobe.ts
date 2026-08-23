@@ -43,7 +43,8 @@ export async function generateSoundrobeFromMusicProfile(
   const albumPalette = await extractAlbumPalette(weightedMusicProfile, timeWeights);
   const palette = generatePalette(styleProfile, albumPalette);
   const garmentIntents = generateGarmentIntents(styleProfile, palette);
-  const candidatesByIntent = await searchCommerceOncePerKey(garmentIntents, commerceProvider);
+  const searchedGarmentIntents = selectSearchableIntents(garmentIntents);
+  const candidatesByIntent = await searchCommerceOncePerKey(searchedGarmentIntents, commerceProvider);
   const rankedProducts = rankProducts(candidatesByIntent, preferences);
   const outfits = assembleOutfits(rankedProducts);
   const signaturePieces = selectSignaturePieces(rankedProducts, 48);
@@ -87,6 +88,32 @@ async function searchCommerceOncePerKey(garmentIntents: ReturnType<typeof genera
   }));
 
   return searchedGroups.flat();
+}
+
+function selectSearchableIntents(garmentIntents: ReturnType<typeof generateGarmentIntents>) {
+  const maxTotal = 10;
+  const maxPerCategory = new Map([
+    ["outerwear", 1],
+    ["top", 2],
+    ["bottom", 2],
+    ["dress", 1],
+    ["shoes", 2],
+    ["bag", 1],
+    ["jewelry", 1],
+    ["accessory", 1],
+  ]);
+  const selected: typeof garmentIntents = [];
+  const counts = new Map<string, number>();
+
+  for (const intent of garmentIntents) {
+    if (selected.length >= maxTotal) break;
+    const count = counts.get(intent.category) ?? 0;
+    if (count >= (maxPerCategory.get(intent.category) ?? 1)) continue;
+    selected.push(intent);
+    counts.set(intent.category, count + 1);
+  }
+
+  return selected;
 }
 
 function selectSignaturePieces(rankedProducts: ProductRecommendation[], limit: number) {

@@ -20,7 +20,7 @@ type SerpApiResponse = {
 };
 
 const DEFAULT_RESULTS_PER_SEARCH = 20;
-const DEFAULT_MAX_LIVE_SEARCHES = 3;
+const DEFAULT_MAX_LIVE_SEARCHES = 5;
 const DEFAULT_CACHE_TTL_DAYS = 30;
 
 export class SerpApiCommerceProvider implements CommerceProvider {

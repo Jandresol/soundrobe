@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { GarmentCategory, GarmentIntent } from "@/src/domain/style/types";
 import { SerpApiCommerceProvider } from "@/src/services/commerce/SerpApiCommerceProvider";
 
-const maxSearches = 18;
+const maxSearches = 27;
 
 loadLocalEnv();
 
@@ -10,24 +10,33 @@ const apiKey = process.env.SERPAPI_API_KEY;
 if (!apiKey) throw new Error("SERPAPI_API_KEY is missing.");
 
 const intents: Array<Pick<GarmentIntent, "category" | "garmentType" | "colors" | "materials" | "aesthetics" | "searchQuery">> = [
-  intent("outerwear", "cropped denim jacket", ["denim"], ["denim"], ["worn-in"], "womenswear cropped denim jacket"),
-  intent("outerwear", "black leather moto jacket", ["black"], ["leather"], ["rebellious"], "womenswear black leather moto jacket"),
-  intent("outerwear", "tailored blazer", ["black"], ["wool"], ["classic"], "womenswear black tailored blazer"),
-  intent("top", "rib knit long sleeve", ["burgundy"], ["rib knit"], ["sensual"], "womenswear burgundy rib knit long sleeve"),
-  intent("top", "mesh long sleeve", ["black"], ["mesh"], ["club"], "womenswear black mesh long sleeve top"),
-  intent("top", "graphic baby tee", ["black"], ["cotton"], ["playful"], "womenswear black graphic baby tee"),
-  intent("bottom", "low-rise jeans", ["denim"], ["denim"], ["2000s"], "womenswear low rise jeans"),
-  intent("bottom", "wide-leg trouser", ["camel"], ["cotton"], ["relaxed"], "womenswear camel wide leg trouser"),
-  intent("bottom", "slip skirt", ["black"], ["satin"], ["sleek"], "womenswear black satin slip skirt"),
-  intent("dress", "slip dress", ["black"], ["satin"], ["sensual"], "womenswear black satin slip dress"),
-  intent("dress", "mini dress", ["silver"], ["metallic"], ["party"], "womenswear silver mini dress"),
-  intent("shoes", "black boots", ["black"], ["leather"], ["rebellious"], "womenswear black leather boots"),
-  intent("shoes", "ballet flats", ["black"], ["leather"], ["romantic"], "womenswear black ballet flats"),
-  intent("shoes", "retro sneakers", ["white"], ["cotton"], ["casual"], "womenswear white retro sneakers"),
-  intent("bag", "compact shoulder bag", ["black"], ["leather"], ["sleek"], "womenswear black compact shoulder bag"),
-  intent("bag", "tote bag", ["cream"], ["canvas"], ["casual"], "womenswear cream canvas tote bag"),
-  intent("jewelry", "gold hoop earrings", ["gold"], ["metallic"], ["polished"], "womenswear gold hoop earrings"),
-  intent("accessory", "patterned scarf", ["green"], ["silk"], ["artful"], "womenswear patterned silk scarf"),
+  intent("shoes", "strappy heels", ["black"], ["leather"], ["club", "glam"], "womenswear black strappy heels"),
+  intent("shoes", "metallic heels", ["silver"], ["metallic"], ["glam"], "womenswear metallic heels"),
+  intent("shoes", "platform sandals", ["black"], ["leather"], ["party", "y2k"], "womenswear platform sandals"),
+  intent("shoes", "hiking boots", ["brown"], ["leather"], ["technical", "outdoor"], "womenswear hiking boots"),
+  intent("shoes", "cowboy boots", ["brown"], ["leather"], ["western"], "womenswear cowboy boots"),
+  intent("shoes", "mary janes", ["black"], ["leather"], ["preppy", "romantic"], "womenswear mary janes"),
+  intent("top", "corset top", ["black"], ["satin"], ["sensual", "y2k"], "womenswear corset top"),
+  intent("top", "lace blouse", ["cream"], ["lace"], ["romantic"], "womenswear lace blouse"),
+  intent("top", "band tee", ["black"], ["cotton"], ["rock", "worn-in"], "womenswear band tee"),
+  intent("top", "sequin top", ["silver"], ["metallic"], ["party", "glam"], "womenswear sequin top"),
+  intent("top", "halter top", ["black"], ["cotton"], ["club", "summer"], "womenswear halter top"),
+  intent("top", "polo shirt", ["white"], ["cotton"], ["preppy", "sporty"], "womenswear polo shirt"),
+  intent("bottom", "cargo pants", ["black"], ["cotton"], ["street", "utility"], "womenswear cargo pants"),
+  intent("bottom", "maxi skirt", ["cream"], ["cotton"], ["bohemian", "soft"], "womenswear maxi skirt"),
+  intent("bottom", "plaid mini skirt", ["black"], ["cotton"], ["preppy"], "womenswear plaid mini skirt"),
+  intent("bottom", "leather pants", ["black"], ["leather"], ["rock", "club"], "womenswear leather pants"),
+  intent("bottom", "parachute pants", ["black"], ["nylon"], ["rave", "street"], "womenswear parachute pants"),
+  intent("bottom", "pleated skirt", ["black"], ["cotton"], ["preppy", "coquette"], "womenswear pleated skirt"),
+  intent("dress", "bodycon mini dress", ["black"], ["satin"], ["club", "sensual"], "womenswear bodycon mini dress"),
+  intent("dress", "denim mini dress", ["denim"], ["denim"], ["y2k", "playful"], "womenswear denim mini dress"),
+  intent("dress", "wrap dress", ["black"], ["satin"], ["romantic", "polished"], "womenswear wrap dress"),
+  intent("outerwear", "utility jacket", ["green"], ["cotton"], ["utility", "technical"], "womenswear utility jacket"),
+  intent("outerwear", "faux fur jacket", ["black"], ["faux fur"], ["glam"], "womenswear faux fur jacket"),
+  intent("outerwear", "puffer jacket", ["black"], ["nylon"], ["street", "sporty"], "womenswear puffer jacket"),
+  intent("bag", "metallic shoulder bag", ["silver"], ["metallic"], ["club", "glam"], "womenswear metallic shoulder bag"),
+  intent("bag", "slouchy tote bag", ["cream"], ["canvas"], ["indie", "casual"], "womenswear slouchy tote bag"),
+  intent("jewelry", "statement jewelry", ["silver"], ["metallic"], ["glam", "maximalist"], "womenswear statement jewelry"),
 ];
 
 async function main() {

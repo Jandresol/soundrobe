@@ -17,7 +17,16 @@ const STYLE_TAGS = new Set([
   "experimental",
   "club",
   "sleek",
+  "soft girl",
+  "clean girl",
+  "mcbling",
+  "mall goth",
+  "cyber sigilism",
 ]);
+
+const ARTIST_STYLE_SIGNALS: Record<string, string[]> = {
+  "ariana grande": ["soft girl", "clean girl", "glossy", "romantic", "pop"],
+};
 
 export function calculateGenreWeights(range: MusicTimeRange): WeightedSignal[] {
   const totals = new Map<string, WeightedSignal>();
@@ -26,6 +35,12 @@ export function calculateGenreWeights(range: MusicTimeRange): WeightedSignal[] {
       const id = genre.toLowerCase();
       const current = totals.get(id) ?? { id, label: genre, weight: 0 };
       current.weight += (artist.weight * signalMultiplier(id, "artist")) / Math.max(artist.genres.length, 1);
+      totals.set(id, current);
+    }
+    for (const signal of ARTIST_STYLE_SIGNALS[artist.name.toLowerCase()] ?? []) {
+      const id = signal.toLowerCase();
+      const current = totals.get(id) ?? { id, label: signal, weight: 0 };
+      current.weight += artist.weight * 0.32;
       totals.set(id, current);
     }
   }

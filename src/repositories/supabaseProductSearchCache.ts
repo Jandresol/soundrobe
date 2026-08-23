@@ -40,6 +40,21 @@ type SupabaseProductRow = {
   aesthetics: string[] | null;
 };
 
+type SupabaseProductSearchRow = {
+  id: string;
+  intent_category: string | null;
+  intent_garment_type: string | null;
+  fetched_at: string;
+};
+
+type SupabaseProductSearchResultRow = {
+  search_id: string;
+  product_id: string;
+  position: number | null;
+  source_rank: number | null;
+  products: SupabaseProductRow | SupabaseProductRow[] | null;
+};
+
 type SupabaseConfig = {
   url: string;
   serviceRoleKey: string;
@@ -101,23 +116,121 @@ export async function writeSupabaseProductSearchCache(record: ProductSearchCache
 
 export async function listSupabaseProducts({
   categories,
+  garmentTypes = [],
   offset = 0,
   limit = 24,
 }: {
   categories: string[];
+  garmentTypes?: string[];
   offset?: number;
   limit?: number;
 }): Promise<ProductCandidate[]> {
   const config = getSupabaseConfig();
   if (!config || !categories.length) return [];
 
+  const searchProducts = await listSupabaseProductsFromSearchResults(config, {
+    categories,
+    garmentTypes,
+    offset,
+    limit,
+  });
+  if (searchProducts.length) return searchProducts;
+
+  return listSupabaseProductsFlat(config, { categories, garmentTypes, offset, limit });
+}
+
+async function listSupabaseProductsFromSearchResults(
+  config: SupabaseConfig,
+  {
+    categories,
+    garmentTypes = [],
+    offset = 0,
+    limit = 24,
+  }: {
+    categories: string[];
+    garmentTypes?: string[];
+    offset?: number;
+    limit?: number;
+  },
+): Promise<ProductCandidate[]> {
+  const searchParams = new URLSearchParams({
+    select: "id,intent_category,intent_garment_type,fetched_at",
+    intent_category: `in.(${categories.join(",")})`,
+    expires_at: `gte.${new Date().toISOString()}`,
+    order: "fetched_at.desc",
+    limit: "80",
+  });
+  if (garmentTypes.length) searchParams.set("or", `(${garmentTypes.flatMap(intentGarmentTypeFilters).join(",")})`);
+
+  const searchResponse = await fetch(`${config.url}/rest/v1/product_searches?${searchParams.toString()}`, {
+    headers: supabaseHeaders(config),
+    cache: "no-store",
+  });
+  if (!searchResponse.ok) return [];
+
+  const searches = await searchResponse.json() as SupabaseProductSearchRow[];
+  if (!searches.length) return [];
+
+  const orderedSearches = orderSearchesByIntent(searches, garmentTypes);
+  const searchIds = orderedSearches.map((search) => search.id);
+  const resultParams = new URLSearchParams({
+    select: "search_id,product_id,position,source_rank,products(id,provider_product_id,retailer,brand,title,price,currency,image_url,product_url,availability,category,garment_type,colors,materials,aesthetics)",
+    search_id: `in.(${searchIds.join(",")})`,
+    order: "position.asc",
+    limit: String(Math.max(1, Math.min(limit + offset + 80, 600))),
+  });
+
+  const resultResponse = await fetch(`${config.url}/rest/v1/product_search_results?${resultParams.toString()}`, {
+    headers: supabaseHeaders(config),
+    cache: "no-store",
+  });
+  if (!resultResponse.ok) return [];
+
+  const rows = await resultResponse.json() as SupabaseProductSearchResultRow[];
+  const searchOrder = new Map(searchIds.map((id, index) => [id, index]));
+  const productRows = rows
+    .map((row) => {
+      const product = Array.isArray(row.products) ? row.products[0] : row.products;
+      if (!product) return null;
+      return {
+        product,
+        position: row.position ?? row.source_rank ?? 999,
+        searchIndex: searchOrder.get(row.search_id) ?? 999,
+      };
+    })
+    .filter((entry): entry is { product: SupabaseProductRow; position: number; searchIndex: number } => Boolean(entry))
+    .sort((a, b) => a.searchIndex - b.searchIndex || a.position - b.position);
+
+  const byUrl = new Map<string, SupabaseProductRow>();
+  for (const entry of productRows) {
+    if (!byUrl.has(entry.product.product_url)) byUrl.set(entry.product.product_url, entry.product);
+  }
+
+  return Array.from(byUrl.values()).slice(offset, offset + limit).map(productFromRow);
+}
+
+async function listSupabaseProductsFlat(
+  config: SupabaseConfig,
+  {
+    categories,
+    garmentTypes = [],
+    offset = 0,
+    limit = 24,
+  }: {
+    categories: string[];
+    garmentTypes?: string[];
+    offset?: number;
+    limit?: number;
+  },
+): Promise<ProductCandidate[]> {
   const params = new URLSearchParams({
     select: "id,provider_product_id,retailer,brand,title,price,currency,image_url,product_url,availability,category,garment_type,colors,materials,aesthetics",
     category: `in.(${categories.join(",")})`,
     order: "updated_at.desc",
-    limit: String(Math.max(1, Math.min(limit, 60))),
+    limit: String(Math.max(1, Math.min(limit, 200))),
     offset: String(Math.max(0, offset)),
   });
+  if (garmentTypes.length) params.set("or", `(${garmentTypes.flatMap(garmentTypeFilters).join(",")})`);
 
   const response = await fetch(`${config.url}/rest/v1/products?${params.toString()}`, {
     headers: supabaseHeaders(config),
@@ -127,6 +240,43 @@ export async function listSupabaseProducts({
 
   const rows = await response.json() as SupabaseProductRow[];
   return rows.map(productFromRow);
+}
+
+function orderSearchesByIntent(searches: SupabaseProductSearchRow[], garmentTypes: string[]) {
+  if (!garmentTypes.length) return searches;
+  const normalizedGarmentTypes = garmentTypes.map((garmentType) => garmentType.toLowerCase());
+  return [...searches].sort((a, b) => {
+    const left = intentPriority((a.intent_garment_type ?? "").toLowerCase(), normalizedGarmentTypes);
+    const right = intentPriority((b.intent_garment_type ?? "").toLowerCase(), normalizedGarmentTypes);
+    return left - right || Date.parse(b.fetched_at) - Date.parse(a.fetched_at);
+  });
+}
+
+export function intentPriority(value: string, orderedGarmentTypes: string[]) {
+  const index = orderedGarmentTypes.findIndex((garmentType) =>
+    value === garmentType ||
+    value.includes(garmentType) ||
+    garmentType.includes(value)
+  );
+  return index >= 0 ? index : 999;
+}
+
+function intentGarmentTypeFilters(value: string) {
+  const normalized = value.trim();
+  const escaped = normalized.replaceAll("\"", "\\\"");
+  return [
+    `intent_garment_type.eq."${escaped}"`,
+    `intent_garment_type.ilike.*${normalized.replaceAll("*", "").replaceAll(",", " ")}*`,
+  ];
+}
+
+function garmentTypeFilters(value: string) {
+  const normalized = value.trim();
+  const escaped = normalized.replaceAll("\"", "\\\"");
+  return [
+    `garment_type.eq."${escaped}"`,
+    `garment_type.ilike.*${normalized.replaceAll("*", "").replaceAll(",", " ")}*`,
+  ];
 }
 
 async function writeNormalizedProductSearch(config: SupabaseConfig, record: ProductSearchCacheRecord) {

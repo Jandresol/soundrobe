@@ -14,6 +14,10 @@ export const PRODUCT_SCORE_WEIGHTS = {
   priority: 10,
   availability: 6,
   priceFit: 8,
+  productTextSignal: 9,
+  retailerStyleAffinity: 7,
+  offContextPenalty: 28,
+  massBasicRetailerPenalty: 18,
 } as const;
 
 export const OUTFIT_SCORE_WEIGHTS = {

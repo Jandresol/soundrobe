@@ -11,8 +11,9 @@ import { OutfitCanvas } from "@/components/ui/OutfitCanvas";
 import { Panel } from "@/components/ui/Panel";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { RetroButton } from "@/components/ui/RetroButton";
-import { adaptGarments, adaptAllSignatureGarments, adaptMusicProfile, adaptOutfits, adaptStyleProfile, garmentFromProduct } from "@/lib/result-adapter";
-import type { ProductCandidate } from "@/src/domain/commerce/types";
+import { adaptGarments, adaptAllSignatureGarments, adaptMusicProfile, adaptOutfits, adaptStyleProfile, garmentFromRecommendation } from "@/lib/result-adapter";
+import type { ProductCandidate, ProductRecommendation } from "@/src/domain/commerce/types";
+import { scoreProduct } from "@/src/engine/ranking/scoreProduct";
 import { defaultLook as fallbackLook, garments as fallbackGarments, lookPresets as fallbackLooks, musicProfile as fallbackMusicProfile, styleProfile as fallbackStyleProfile } from "@/lib/mock-data";
 import type { SoundrobeResult } from "@/src/domain/soundrobe/types";
 import type { Category, Garment, Outfit, Screen } from "@/types/soundrobe";
@@ -35,20 +36,8 @@ const categoryTabs: Array<{ label: string; value: Category }> = [
 ];
 
 const signatureCategoryOrder: Category[] = ["outerwear", "top", "bottom", "dress", "shoe", "accessory"];
-const catalogFetchBatchSize = 1;
-const catalogSearchLimitPerCategory = 1;
-const emptyCatalogSearchCounts = (): Record<Category, number> => ({
-  top: 0,
-  bottom: 0,
-  dress: 0,
-  outerwear: 0,
-  shoe: 0,
-  accessory: 0,
-});
-
-function catalogSearchStorageKey(userId: string) {
-  return `soundrobe-catalog-searches:v1:${userId}`;
-}
+const initialCatalogLimitPerCategory = 120;
+const catalogPageLimit = 48;
 
 const analysisSteps = [
   "READING MUSIC PROFILE",
@@ -62,7 +51,7 @@ const analysisSteps = [
 ];
 
 const defaultTimeWeights = { longTerm: 50, mediumTerm: 30, shortTerm: 20 };
-const soundrobeCacheVersion = "v5";
+const soundrobeCacheVersion = "v12";
 const soundrobeCacheTtlMs = 24 * 60 * 60 * 1000;
 const placeholderPalettes: Record<Category, string[]> = {
   top: ["#151821", "#e64aa0", "#ffd3e8"],
@@ -97,9 +86,132 @@ function sortByMatchScore(garments: Garment[]) {
   return [...garments].sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
 }
 
+const minimumInitialLookMatchByCategory: Record<Category, number> = {
+  outerwear: 45,
+  top: 60,
+  bottom: 42,
+  dress: 42,
+  shoe: 35,
+  accessory: 35,
+};
+
+function isStrongInitialLookCandidate(garment: Garment) {
+  return (garment.matchScore ?? 0) >= minimumInitialLookMatchByCategory[garment.category];
+}
+
+function isStrongSignatureCandidate(garment: Garment) {
+  const floor = Math.max(40, minimumInitialLookMatchByCategory[garment.category] - 8);
+  return (garment.matchScore ?? 0) >= floor;
+}
+
 function filterGarmentsByTag(garments: Garment[], tagId: string | null) {
   if (!tagId) return garments;
   return garments.filter((garment) => garmentMatchesTag(garment, tagId));
+}
+
+function normalizeProductCategory(category?: string): Category {
+  if (category === "shoes") return "shoe";
+  if (category === "bag" || category === "jewelry") return "accessory";
+  if (category === "top" || category === "bottom" || category === "dress" || category === "outerwear" || category === "shoe" || category === "accessory") return category;
+  return "accessory";
+}
+
+function intentMatchesProductCategory(intentCategory: string, productCategory?: string) {
+  const normalizedProduct = normalizeProductCategory(productCategory);
+  if (normalizedProduct === "shoe") return intentCategory === "shoes";
+  if (normalizedProduct === "accessory") return intentCategory === "bag" || intentCategory === "jewelry" || intentCategory === "accessory";
+  return intentCategory === normalizedProduct;
+}
+
+function intentMatchesUiCategory(intentCategory: string, category: Category) {
+  if (category === "shoe") return intentCategory === "shoes";
+  if (category === "accessory") return intentCategory === "bag" || intentCategory === "jewelry" || intentCategory === "accessory";
+  return intentCategory === category;
+}
+
+function garmentTypesForCategory(result: SoundrobeResult | null, category: Category) {
+  return Array.from(new Set(
+    (result?.garmentIntents ?? [])
+      .filter((intent) => intentMatchesUiCategory(intent.category, category))
+      .flatMap((intent) => expandGarmentTypeForCatalog(intent.garmentType))
+  ));
+}
+
+function expandGarmentTypeForCatalog(garmentType: string) {
+  const normalized = garmentType.toLowerCase();
+  const expansions: Record<string, string[]> = {
+    "fitted leather jacket": ["fitted leather jacket", "moto jacket", "cropped leather jacket", "distressed leather jacket", "worn leather moto jacket"],
+    "cropped leather jacket": ["cropped leather jacket", "moto jacket", "fitted leather jacket", "distressed leather jacket"],
+    "worn leather moto jacket": ["worn leather moto jacket", "moto jacket", "distressed leather jacket", "fitted leather jacket"],
+    "pointed leather boots": ["pointed leather boots", "knee-high boots", "tall boots", "moto boots", "boots"],
+    "moto boots": ["moto boots", "engineer boots", "combat boots", "knee-high boots", "boots"],
+    "engineer boots": ["engineer boots", "moto boots", "combat boots", "boots"],
+    "statement flared trouser": ["statement flared trouser", "wide-leg trouser", "flare jeans", "bell bottoms"],
+    "detailed tailored trouser": ["detailed tailored trouser", "tailored trouser", "wide-leg trouser"],
+    "satin cowl top": ["satin cowl top", "cowl top", "draped top", "satin blouse", "silk cami"],
+    "asymmetric fitted top": ["asymmetric fitted top", "asymmetric top", "corset-detail top", "mesh long sleeve"],
+    "distressed fitted graphic tee": ["distressed fitted graphic tee", "graphic baby tee", "goth baby tee", "tattoo graphic baby tee", "band tee"],
+    "sculptural gold earrings": ["sculptural gold earrings", "gold hoops", "gold jewelry", "statement jewelry"],
+    "statement belt": ["statement belt", "studded belt", "grommet belt", "leather belt"],
+    "unusual leather bag": ["unusual leather bag", "compact shoulder bag", "slouchy leather bag", "hardware shoulder bag"],
+  };
+  return expansions[normalized] ?? [garmentType];
+}
+
+function catalogIntentSignature(result: SoundrobeResult) {
+  return result.garmentIntents
+    .map((intent) => `${intent.category}:${intent.garmentType}`)
+    .join("|");
+}
+
+function scoreCatalogProducts(products: ProductCandidate[], result: SoundrobeResult | null) {
+  if (!result) return [] as Garment[];
+  const recommendations = new Map<string, ProductRecommendation>();
+
+  for (const product of products) {
+    for (const intent of result.garmentIntents) {
+      if (!intentMatchesProductCategory(intent.category, product.attributes.category)) continue;
+      const productForIntent: ProductCandidate = {
+        ...product,
+        attributes: {
+          ...product.attributes,
+          category: intent.category,
+        },
+      };
+      const scored = scoreProduct(productForIntent, intent, result.metadata.shoppingPreferences);
+      const previous = recommendations.get(product.id);
+      if (!previous || scored.score > previous.score) {
+        recommendations.set(product.id, {
+          product: productForIntent,
+          intent,
+          score: scored.score,
+          reasons: scored.reasons,
+        });
+      }
+    }
+  }
+
+  return sortByMatchScore(
+    Array.from(recommendations.values())
+      .filter((recommendation) => recommendation.score > 0)
+      .map(garmentFromRecommendation)
+  );
+}
+
+function buildLookGarmentsFromRankedCatalog(ranked: Garment[]) {
+  const categoryOrder: Category[] = ["outerwear", "top", "bottom", "dress", "shoe", "accessory"];
+  const selected: Garment[] = [];
+
+  for (const category of categoryOrder) {
+    const garment = ranked.find((candidate) =>
+      candidate.category === category &&
+      isStrongInitialLookCandidate(candidate) &&
+      !selected.some((item) => item.id === candidate.id)
+    );
+    if (garment) selected.push(garment);
+  }
+
+  return selected.slice(0, 5);
 }
 
 function placeholderBackground(category: Category) {
@@ -175,6 +287,64 @@ function readCachedSoundrobe(source: "spotify" | "demo", weights: typeof default
   }
 }
 
+function compactCachedSoundrobeResult(result: SoundrobeResult): SoundrobeResult {
+  const compactRange = (range: SoundrobeResult["musicProfile"]["shortTerm"]) => ({
+    artists: range.artists.slice(0, 30).map((artist) => ({
+      ...artist,
+      genres: artist.genres.slice(0, 12),
+    })),
+    tracks: range.tracks.slice(0, 20).map((track) => ({
+      ...track,
+      tags: track.tags?.slice(0, 12),
+    })),
+    genres: range.genres.slice(0, 30),
+    eras: range.eras.slice(0, 12),
+  });
+
+  return {
+    ...result,
+    musicProfile: {
+      ...result.musicProfile,
+      shortTerm: compactRange(result.musicProfile.shortTerm),
+      mediumTerm: compactRange(result.musicProfile.mediumTerm),
+      longTerm: compactRange(result.musicProfile.longTerm),
+      combinedGenres: result.musicProfile.combinedGenres.slice(0, 40),
+      combinedEras: result.musicProfile.combinedEras.slice(0, 12),
+    },
+    styleProfile: {
+      ...result.styleProfile,
+      traits: result.styleProfile.traits.slice(0, 20),
+      colors: result.styleProfile.colors.slice(0, 20),
+      materials: result.styleProfile.materials.slice(0, 20),
+      silhouettes: result.styleProfile.silhouettes.slice(0, 20),
+      garmentTypes: result.styleProfile.garmentTypes.slice(0, 30),
+      accessories: result.styleProfile.accessories.slice(0, 20),
+      aesthetics: result.styleProfile.aesthetics.slice(0, 20),
+      sourcesBySignal: {},
+    },
+    signaturePieces: result.signaturePieces.slice(0, 8),
+    outfits: result.outfits.slice(0, 3),
+    metadata: {
+      ...result.metadata,
+      diagnostics: result.metadata.diagnostics ? {
+        combinedGenreCount: result.metadata.diagnostics.combinedGenreCount,
+        artistGenreCount: result.metadata.diagnostics.artistGenreCount,
+        timeWeights: result.metadata.diagnostics.timeWeights,
+      } : undefined,
+    },
+  };
+}
+
+function clearSoundrobeResultCache() {
+  if (typeof window === "undefined") return;
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index);
+    if (key?.startsWith("soundrobe-result:")) {
+      window.localStorage.removeItem(key);
+    }
+  }
+}
+
 function writeCachedSoundrobe(result: SoundrobeResult, weights: typeof defaultTimeWeights) {
   if (typeof window === "undefined") return;
   const source = result.metadata.musicSource;
@@ -184,10 +354,24 @@ function writeCachedSoundrobe(result: SoundrobeResult, weights: typeof defaultTi
     source,
     userId: result.user.id,
     weights,
-    result,
+    result: compactCachedSoundrobeResult(result),
   };
-  window.localStorage.setItem(key, JSON.stringify(payload));
-  window.localStorage.setItem(cacheIndexKey(source), key);
+  try {
+    window.localStorage.setItem(key, JSON.stringify(payload));
+    window.localStorage.setItem(cacheIndexKey(source), key);
+  } catch (error) {
+    if (error instanceof DOMException && (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED")) {
+      try {
+        clearSoundrobeResultCache();
+        window.localStorage.setItem(key, JSON.stringify(payload));
+        window.localStorage.setItem(cacheIndexKey(source), key);
+      } catch {
+        clearSoundrobeResultCache();
+      }
+      return;
+    }
+    throw error;
+  }
 }
 
 const reasonSourceLabels: Record<string, string> = {
@@ -259,18 +443,22 @@ export default function HomePage() {
   const [whyThisGarmentId, setWhyThisGarmentId] = useState<string | null>(null);
   const [dismissedGarmentIds, setDismissedGarmentIds] = useState<string[]>([]);
   const [, setFeedbackReasons] = useState<Record<string, string>>({});
-  const [catalogGarments, setCatalogGarments] = useState<Garment[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogProducts, setCatalogProducts] = useState<ProductCandidate[]>([]);
   const [catalogLoadedForUser, setCatalogLoadedForUser] = useState<string | null>(null);
   const [catalogOffsets, setCatalogOffsets] = useState<Record<Category, number>>({ top: 0, bottom: 0, dress: 0, outerwear: 0, shoe: 0, accessory: 0 });
   const [activeProductTag, setActiveProductTag] = useState<string | null>(null);
   const [signatureSlotByCategory, setSignatureSlotByCategory] = useState<Partial<Record<Category, string>>>({});
   const [hiddenSignatureCategories, setHiddenSignatureCategories] = useState<Category[]>([]);
-  const [catalogSearchCounts, setCatalogSearchCounts] = useState<Record<Category, number>>(emptyCatalogSearchCounts);
+  const [isRebuildingMix, setIsRebuildingMix] = useState(false);
 
 const generatedGarments = useMemo(
   () => soundrobeResult ? adaptGarments(soundrobeResult) : [],
   [soundrobeResult]
+);
+
+const catalogGarments = useMemo(
+  () => scoreCatalogProducts(catalogProducts, soundrobeResult),
+  [catalogProducts, soundrobeResult]
 );
 
 const garments = useMemo(() => {
@@ -308,28 +496,27 @@ const garments = useMemo(() => {
     const dismissed = new Set(dismissedGarmentIds);
     return rawSignatureGarments.filter((garment) => !dismissed.has(garment.id));
   }, [rawSignatureGarments, dismissedGarmentIds]);
-  const defaultSignatureByCategory = useMemo(() => {
-    const map = new Map<Category, Garment>();
-    for (const garment of allSignatureGarments) {
-      if (!map.has(garment.category)) map.set(garment.category, garment);
-    }
-    return map;
-  }, [allSignatureGarments]);
   const signatureGarments = useMemo(() => {
     const hidden = new Set(hiddenSignatureCategories);
-    return signatureCategoryOrder
+    const eligibleSignatureGarments = allSignatureGarments.filter(isStrongSignatureCandidate);
+    const topMatch = eligibleSignatureGarments.find((garment) => !hidden.has(garment.category));
+    const categoryCoverage = signatureCategoryOrder
       .filter((category) => !hidden.has(category))
       .map((category) => {
         const slotId = signatureSlotByCategory[category];
         if (slotId) {
-          const slotted = allSignatureGarments.find((entry) => entry.id === slotId)
+          const slotted = eligibleSignatureGarments.find((entry) => entry.id === slotId)
             ?? garments.find((entry) => entry.id === slotId);
-          if (slotted) return slotted;
+          if (slotted && isStrongSignatureCandidate(slotted)) return slotted;
         }
-        return defaultSignatureByCategory.get(category);
+        return eligibleSignatureGarments.find((entry) => entry.category === category);
       })
       .filter((garment): garment is Garment => Boolean(garment));
-  }, [allSignatureGarments, garments, defaultSignatureByCategory, hiddenSignatureCategories, signatureSlotByCategory]);
+    const byId = new Map<string, Garment>();
+    if (topMatch) byId.set(topMatch.id, topMatch);
+    for (const garment of categoryCoverage) byId.set(garment.id, garment);
+    return Array.from(byId.values());
+  }, [allSignatureGarments, garments, hiddenSignatureCategories, signatureSlotByCategory]);
   const wardrobeByCategory = useMemo(() => {
     const grouped = new Map<Category, Garment[]>();
     for (const tab of categoryTabs) {
@@ -374,15 +561,36 @@ const garments = useMemo(() => {
     };
   }, [musicProfile, nowPlayingIndex]);
 
+  const displayedCurrentLook = useMemo(() => {
+    if (!soundrobeResult || catalogGarments.length === 0) return currentLook;
+    const resolved = currentLook.garmentIds
+      .map((id) => garments.find((garment) => garment.id === id))
+      .filter((garment): garment is Garment => Boolean(garment));
+    const kept = resolved.filter(isStrongInitialLookCandidate);
+    const byCategory = new Map<Category, Garment>();
+    for (const garment of buildLookGarmentsFromRankedCatalog(garments)) {
+      byCategory.set(garment.category, garment);
+    }
+    for (const garment of kept) {
+      byCategory.set(garment.category, garment);
+    }
+    const garmentIds = (["outerwear", "dress", "top", "bottom", "shoe", "accessory"] as Category[])
+      .map((category) => byCategory.get(category))
+      .filter((garment): garment is Garment => Boolean(garment))
+      .slice(0, 5)
+      .map((garment) => garment.id);
+    return { ...currentLook, garmentIds, description: "" };
+  }, [catalogGarments.length, currentLook, garments, soundrobeResult]);
+
   const currentLookGarments = useMemo(() => {
     const slotOrder: Array<Category> = ["outerwear", "dress", "top", "bottom", "shoe", "accessory"];
     const byCategory = new Map<Category, Garment>();
-    for (const id of currentLook.garmentIds) {
+    for (const id of displayedCurrentLook.garmentIds) {
       const garment = garments.find((item) => item.id === id);
       if (garment) byCategory.set(garment.category, garment);
     }
     return slotOrder.map((category) => byCategory.get(category)).filter((garment): garment is Garment => Boolean(garment));
-  }, [currentLook, garments]);
+  }, [displayedCurrentLook, garments]);
   const selectedCategoryGarments = useMemo(
     () => wardrobeByCategory.get(selectedCategory) ?? [],
     [wardrobeByCategory, selectedCategory],
@@ -396,29 +604,6 @@ const garments = useMemo(() => {
     [selectedCategoryGarments],
   );
   const normalizedSelectedCategory = selectedSlotCategory === "shoes" ? "shoe" : selectedSlotCategory;
-  const catalogSearchesUsed = useMemo(
-    () => Object.values(catalogSearchCounts).reduce((total, count) => total + count, 0),
-    [catalogSearchCounts],
-  );
-  const selectedCategorySearchUsed = (catalogSearchCounts[selectedCategory] ?? 0) >= catalogSearchLimitPerCategory;
-
-  useEffect(() => {
-    const userId = soundrobeResult?.user.id;
-    if (!userId || typeof window === "undefined") return;
-    try {
-      const saved = JSON.parse(window.localStorage.getItem(catalogSearchStorageKey(userId)) ?? "null") as Partial<Record<Category, number>> | null;
-      setCatalogSearchCounts({ ...emptyCatalogSearchCounts(), ...saved });
-    } catch {
-      setCatalogSearchCounts(emptyCatalogSearchCounts());
-    }
-  }, [soundrobeResult?.user.id]);
-
-  useEffect(() => {
-    const userId = soundrobeResult?.user.id;
-    if (!userId || typeof window === "undefined") return;
-    window.localStorage.setItem(catalogSearchStorageKey(userId), JSON.stringify(catalogSearchCounts));
-  }, [catalogSearchCounts, soundrobeResult?.user.id]);
-
   const handleSetNowPlayingIndex = useCallback((index: number) => {
     audioRef.current?.pause();
     setIsPreviewPlaying(false);
@@ -428,21 +613,25 @@ const garments = useMemo(() => {
   const applySoundrobeResult = useCallback((result: SoundrobeResult, message?: string) => {
     const nextLooks = adaptOutfits(result);
     const nextGarments = adaptGarments(result);
-    const generatedLook = nextLooks[0] ?? { ...fallbackLook, id: "look-generated-empty", garmentIds: nextGarments.slice(0, 5).map((garment) => garment.id) };
+    const rankedCatalogGarments = scoreCatalogProducts(catalogProducts, result);
+    const lookGarments = rankedCatalogGarments.length ? buildLookGarmentsFromRankedCatalog(rankedCatalogGarments) : [];
+    const generatedLook = lookGarments.length
+      ? { id: `catalog-look-${result.user.id}-${Date.now()}`, name: "YOUR SOUNDROBE", garmentIds: lookGarments.map((garment) => garment.id), description: "" }
+      : nextLooks[0] ?? { ...fallbackLook, id: "look-generated-empty", garmentIds: nextGarments.slice(0, 5).map((garment) => garment.id) };
     setFlowError(null);
     setSoundrobeResult(result);
     handleSetNowPlayingIndex(0);
     setSpotifyConnected(result.metadata.musicSource === "spotify");
     setSpotifyMessage(message ?? (result.metadata.musicSource === "spotify" ? "Using Spotify music profile" : "Using demo music profile"));
     setCurrentLook(generatedLook);
-    setSelectedGarmentId(nextGarments[0]?.id ?? generatedLook.garmentIds[0] ?? fallbackLook.garmentIds[0]);
+    setSelectedGarmentId(generatedLook.garmentIds[0] ?? nextGarments[0]?.id ?? fallbackLook.garmentIds[0]);
     setSelectedCategory("top");
     setSelectedSlotCategory("outerwear");
     setDismissedGarmentIds([]);
     setSignatureSlotByCategory({});
     setHiddenSignatureCategories([]);
     setActiveProductTag(null);
-  }, [handleSetNowPlayingIndex]);
+  }, [catalogProducts, handleSetNowPlayingIndex]);
 
   
   useEffect(() => {
@@ -625,12 +814,6 @@ const garments = useMemo(() => {
     };
   }, [analysisMusicSource, applySoundrobeResult, screen, timeWeights]);
 
-  const handleDemoStart = () => {
-    setFlowError(null);
-    setAnalysisMusicSource("demo");
-    setScreen("analysis");
-  };
-
   const handleEnterSoundrobe = () => {
     setFlowError(null);
     setAnalysisMusicSource("spotify");
@@ -658,8 +841,11 @@ const garments = useMemo(() => {
       setScreen("analysis");
       return;
     }
+    if (isRebuildingMix) return;
 
     try {
+      setIsRebuildingMix(true);
+      setFlowError(null);
       setSpotifyMessage("Rebuilding fashion mix from cached music...");
       const response = await fetch("/api/soundrobe", {
         method: "POST",
@@ -683,7 +869,11 @@ const garments = useMemo(() => {
       writeCachedSoundrobe(result, timeWeights);
       applySoundrobeResult(result, "Fashion mix rebuilt from cached music");
     } catch (error) {
-      setSpotifyMessage(error instanceof Error ? error.message : "Could not rebuild fashion mix");
+      const message = error instanceof Error ? error.message : "Could not rebuild fashion mix";
+      setSpotifyMessage(message);
+      setFlowError(message);
+    } finally {
+      setIsRebuildingMix(false);
     }
   };
 
@@ -727,12 +917,11 @@ const garments = useMemo(() => {
     setSelectedSlotCategory(garment.category);
     setCurrentLook((previous) => {
       const resolveGarment = (id: string) => garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
-      const categoryInLookId = previous.garmentIds.find((id) => resolveGarment(id)?.category === garment.category);
-      if (categoryInLookId) {
-        return { ...previous, garmentIds: previous.garmentIds.filter((id) => id !== categoryInLookId) };
+      if (previous.garmentIds.includes(garment.id)) {
+        return { ...previous, garmentIds: previous.garmentIds.filter((id) => id !== garment.id), description: "" };
       }
       const withoutSameCategory = previous.garmentIds.filter((id) => resolveGarment(id)?.category !== garment.category);
-      return { ...previous, garmentIds: [...withoutSameCategory, garment.id] };
+      return { ...previous, garmentIds: [...withoutSameCategory, garment.id], description: "" };
     });
     setSelectedGarmentId(garment.id);
   };
@@ -758,7 +947,8 @@ const garments = useMemo(() => {
   const cycleCurrentLookCategory = (category: Category, currentGarmentId?: string) => {
     setSelectedCategory(category);
     setSelectedSlotCategory(category);
-    const categoryPool = filterGarmentsByTag(wardrobeByCategory.get(category) ?? [], activeProductTag);
+    setActiveProductTag(null);
+    const categoryPool = wardrobeByCategory.get(category) ?? [];
     if (!categoryPool.length) return;
 
     setCurrentLook((previous) => {
@@ -799,16 +989,19 @@ const garments = useMemo(() => {
     const params = new URLSearchParams({
       category,
       offset: String(offset),
-      limit: "24",
+      limit: String(catalogPageLimit),
     });
+    const garmentTypes = garmentTypesForCategory(soundrobeResult, category);
+    if (garmentTypes.length) params.set("garmentTypes", garmentTypes.join(","));
     const response = await fetch(`/api/products?${params.toString()}`, { cache: "no-store" });
     if (!response.ok) return [] as Garment[];
     const payload = await response.json() as { products?: ProductCandidate[] };
-    const nextGarments = (payload.products ?? []).map(garmentFromProduct);
-    setCatalogOffsets((previous) => ({ ...previous, [category]: offset + nextGarments.length }));
-    setCatalogGarments((previous) => {
-      const byId = new Map(previous.map((garment) => [garment.id, garment]));
-      for (const garment of nextGarments) byId.set(garment.id, garment);
+    const nextProducts = payload.products ?? [];
+    const nextGarments = scoreCatalogProducts(nextProducts, soundrobeResult).filter((garment) => garment.category === category);
+    setCatalogOffsets((previous) => ({ ...previous, [category]: offset + nextProducts.length }));
+    setCatalogProducts((previous) => {
+      const byId = new Map(previous.map((product) => [product.id, product]));
+      for (const product of nextProducts) byId.set(product.id, product);
       return Array.from(byId.values());
     });
     return nextGarments;
@@ -1013,14 +1206,15 @@ const garments = useMemo(() => {
 
   useEffect(() => {
     const userId = soundrobeResult?.user.id;
+    const catalogLoadKey = userId && soundrobeResult
+      ? `${soundrobeCacheVersion}:${userId}:${catalogIntentSignature(soundrobeResult)}`
+      : null;
 
-    if (!userId || catalogLoadedForUser === userId) return;
+    if (!userId || !catalogLoadKey || catalogLoadedForUser === catalogLoadKey) return;
 
     let cancelled = false;
 
     const loadInitialCatalog = async () => {
-      setCatalogLoading(true);
-
       try {
         const categories: Category[] = [
           "top",
@@ -1036,8 +1230,10 @@ const garments = useMemo(() => {
             const params = new URLSearchParams({
               category,
               offset: "0",
-              limit: "24",
+              limit: String(initialCatalogLimitPerCategory),
             });
+            const garmentTypes = garmentTypesForCategory(soundrobeResult, category);
+            if (garmentTypes.length) params.set("garmentTypes", garmentTypes.join(","));
 
             return fetch(`/api/products?${params.toString()}`, {
               cache: "no-store",
@@ -1063,37 +1259,19 @@ const garments = useMemo(() => {
           (payload) => payload.products ?? []
         );
 
-        const realGarments = products.map(garmentFromProduct);
-        setCatalogGarments(realGarments);
-        setCatalogLoadedForUser(userId);
+        setCatalogOffsets(
+          categories.reduce((next, category, index) => ({
+            ...next,
+            [category]: payloads[index]?.products?.length ?? 0,
+          }), {} as Record<Category, number>)
+        );
 
-        const ranked = sortByMatchScore(realGarments);
+        const dedupedProducts = Array.from(new Map(products.map((product) => [product.id, product])).values());
+        const realGarments = scoreCatalogProducts(dedupedProducts, soundrobeResult);
+        setCatalogProducts(dedupedProducts);
+        setCatalogLoadedForUser(catalogLoadKey);
 
-        const categoryOrder: Category[] = [
-          "outerwear",
-          "top",
-          "bottom",
-          "dress",
-          "shoe",
-          "accessory",
-        ];
-
-        const selected: Garment[] = [];
-
-        for (const category of categoryOrder) {
-          const garment = ranked.find(
-            (candidate) =>
-              candidate.category === category &&
-              !selected.some((item) => item.id === candidate.id)
-          );
-
-          if (garment) {
-            selected.push(garment);
-          }
-        }
-
-        const garmentIds = selected
-          .slice(0, 5)
+        const garmentIds = buildLookGarmentsFromRankedCatalog(realGarments)
           .map((garment) => garment.id);
 
         if (garmentIds.length > 0) {
@@ -1110,10 +1288,6 @@ const garments = useMemo(() => {
         if (!cancelled) {
           console.error("Could not load initial product catalog", error);
         }
-      } finally {
-        if (!cancelled) {
-          setCatalogLoading(false);
-        }
       }
     };
 
@@ -1122,7 +1296,7 @@ const garments = useMemo(() => {
     return () => {
       cancelled = true;
     };
-  }, [soundrobeResult?.user.id, catalogLoadedForUser]);
+  }, [soundrobeResult, soundrobeResult?.user.id, catalogLoadedForUser]);
 
   
   const renderScreen = () => {
@@ -1525,7 +1699,9 @@ const garments = useMemo(() => {
                   </div>
                 </div>
                 <div className="flex">
-                  <RetroButton size="sm" variant={hasUnappliedMix ? "primary" : "secondary"} onClick={handleRegenerateWithWeights}>REBUILD WITH MIX</RetroButton>
+                  <RetroButton size="sm" variant={hasUnappliedMix ? "primary" : "secondary"} onClick={handleRegenerateWithWeights}>
+                    {isRebuildingMix ? "REBUILDING..." : "REBUILD WITH MIX"}
+                  </RetroButton>
                 </div>
               </div>
             </Panel>
@@ -1769,7 +1945,7 @@ const garments = useMemo(() => {
     <main className="app-shell min-h-screen p-2 md:p-5">
       <div className="mx-auto max-w-[1280px] border-2 border-[#202020] bg-[#d5d5d5] shadow-[8px_8px_0_#111]">
         <div className="title-bar-blue flex items-center justify-between border-b-2 border-[#202020] px-2 py-1">
-          <div className="ui-chrome-text text-[12px] font-bold uppercase text-white">soundrobe.exe - fall fashions</div>
+          <div className="ui-chrome-text text-[12px] font-bold uppercase text-white">soundrobe.exe</div>
           <div className="flex gap-2">
             <span className="window-button">_</span>
             <span className="window-button">□</span>
@@ -1815,33 +1991,35 @@ const garments = useMemo(() => {
             <Panel title="SIGNATURE PIECES">
               {signatureGarments.length > 0 ? (
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  {signatureGarments.map((garment) => (
-                    <GarmentCard
-                      key={`signature-${garment.category}`}
-                      garment={garment}
-                      isSelected={selectedGarmentId === garment.id}
-                      isInLook={currentLook.garmentIds.some((id) => {
-                        const inLook = garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
-                        return inLook?.category === garment.category;
-                      })}
-                      isSaved={savedGarments.includes(garment.id)}
-                      actionLabel={currentLook.garmentIds.some((id) => {
-                        const inLook = garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
-                        return inLook?.category === garment.category;
-                      }) ? "REMOVE" : "ADD"}
-                      onSelect={(entry) => {
-                        setSelectedCategory(entry.category);
-                        setSelectedSlotCategory(entry.category);
-                        toggleCurrentLookGarment(entry);
-                      }}
-                      onSave={handleSaveGarment}
-                      onWhyThis={(entry) => setWhyThisGarmentId(entry.id)}
-                      onNextOption={handleFindNextSignatureOption}
-                      showNextOption
-                      onMoreLikeThis={handleMoreLikeThis}
-                      onNotForMe={handleNotForMe}
-                    />
-                  ))}
+                  {signatureGarments.map((garment) => {
+                    const exactInLook = displayedCurrentLook.garmentIds.includes(garment.id);
+                    const sameCategoryInLook = displayedCurrentLook.garmentIds.some((id) => {
+                      const inLook = garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
+                      return inLook?.category === garment.category;
+                    });
+
+                    return (
+                      <GarmentCard
+                        key={`signature-${garment.category}`}
+                        garment={garment}
+                        isSelected={selectedGarmentId === garment.id}
+                        isInLook={exactInLook}
+                        isSaved={savedGarments.includes(garment.id)}
+                        actionLabel={exactInLook ? "REMOVE" : sameCategoryInLook ? "SWAP" : "ADD"}
+                        onSelect={(entry) => {
+                          setSelectedCategory(entry.category);
+                          setSelectedSlotCategory(entry.category);
+                          toggleCurrentLookGarment(entry);
+                        }}
+                        onSave={handleSaveGarment}
+                        onWhyThis={(entry) => setWhyThisGarmentId(entry.id)}
+                        onNextOption={handleFindNextSignatureOption}
+                        showNextOption
+                        onMoreLikeThis={handleMoreLikeThis}
+                        onNotForMe={handleNotForMe}
+                      />
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="border-2 border-[#202020] bg-[#fff7fb] p-4 text-[12px] font-bold uppercase leading-relaxed text-[#3a2631]">
@@ -1869,7 +2047,7 @@ const garments = useMemo(() => {
                   </label>
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="border-2 border-[#202020] bg-white px-3 py-2 text-[12px] font-bold uppercase">
-                      ${currentLook.garmentIds
+                      ${displayedCurrentLook.garmentIds
                         .reduce(
                           (sum, id) =>
                             sum + (garments.find((item) => item.id === id)?.price ?? 0),
@@ -1958,7 +2136,7 @@ const garments = useMemo(() => {
                   <div className="max-h-[420px] overflow-y-auto pr-1">
                     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
                       {selectedCategoryFilteredGarments.length ? selectedCategoryFilteredGarments.map((garment) => {
-                        const isInLook = currentLook.garmentIds.includes(garment.id);
+                        const isInLook = displayedCurrentLook.garmentIds.includes(garment.id);
                         return (
                           <button
                             key={garment.id}

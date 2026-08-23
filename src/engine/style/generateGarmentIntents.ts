@@ -4,7 +4,17 @@ import { categoryFallbackAssociations, defaultCategoryFallbacks } from "@/src/kn
 import { GARMENT_CATEGORY } from "@/src/knowledge/garmentCompatibility";
 
 const mustHave: GarmentCategory[] = ["outerwear", "top", "bottom", "shoes", "bag", "jewelry", "accessory"];
-const maxIntents = 8;
+const maxIntents = 22;
+const maxIntentsPerCategory: Record<GarmentCategory, number> = {
+  outerwear: 2,
+  top: 3,
+  bottom: 3,
+  dress: 2,
+  shoes: 4,
+  bag: 2,
+  jewelry: 2,
+  accessory: 2,
+};
 type IntentCandidate = {
   signal: WeightedSignal;
   category: GarmentCategory;
@@ -17,13 +27,13 @@ type IntentCandidate = {
   };
 };
 const fallbackSignals: WeightedSignal[] = [
-  { id: "cropped denim jacket", label: "cropped denim jacket", weight: 55 },
+  { id: "short jacket", label: "short jacket", weight: 55 },
   { id: "rib knit long sleeve", label: "rib knit long sleeve", weight: 54 },
   { id: "wide-leg trouser", label: "wide-leg trouser", weight: 53 },
-  { id: "sneakers", label: "sneakers", weight: 52 },
+  { id: "boots", label: "boots", weight: 52 },
   { id: "compact shoulder bag", label: "compact shoulder bag", weight: 51 },
   { id: "gold hoops", label: "gold hoops", weight: 50 },
-  { id: "scarf", label: "scarf", weight: 49 },
+  { id: "statement belt", label: "statement belt", weight: 49 },
 ];
 
 export function generateGarmentIntents(styleProfile: StyleProfile, palette: PaletteColor[] = [], department: FashionDepartment = "womenswear"): GarmentIntent[] {
@@ -43,19 +53,31 @@ export function generateGarmentIntents(styleProfile: StyleProfile, palette: Pale
       score: scoreIntentSignal(signal, styleProfile),
     }))
     .filter((entry): entry is IntentCandidate => Boolean(entry.category));
-  const picked = new Map<GarmentCategory, IntentCandidate>();
+  const picked: IntentCandidate[] = [];
+  const pickedIds = new Set<string>();
+  const pickedCounts = new Map<GarmentCategory, number>();
+  const addPicked = (entry: IntentCandidate | undefined) => {
+    if (!entry || pickedIds.has(entry.signal.id)) return false;
+    const count = pickedCounts.get(entry.category) ?? 0;
+    if (count >= maxIntentsPerCategory[entry.category]) return false;
+    picked.push(entry);
+    pickedIds.add(entry.signal.id);
+    pickedCounts.set(entry.category, count + 1);
+    return true;
+  };
+
   for (const category of mustHave) {
     const match = candidates
       .filter((entry) => entry.category === category)
       .sort((a, b) => b.score - a.score)[0];
-    picked.set(category, match ?? buildFallbackCandidate(category, styleProfile));
+    addPicked(match ?? buildFallbackCandidate(category, styleProfile));
   }
   for (const entry of candidates.sort((a, b) => b.score - a.score)) {
-    if (picked.size >= maxIntents) break;
-    if (!picked.has(entry.category)) picked.set(entry.category, entry);
+    if (picked.length >= maxIntents) break;
+    addPicked(entry);
   }
 
-  return Array.from(picked.values()).map(({ signal, category, fallbackSource }) => {
+  return picked.map(({ signal, category, fallbackSource }) => {
     const sources = styleProfile.sourcesBySignal[signal.id] ?? (fallbackSource ? [fallbackSource] : []);
     const sourceColor = selectIntentColor(signal, category, colors, styleProfile);
     const sourceMaterial = selectIntentMaterial(signal, materials);
