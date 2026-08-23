@@ -260,27 +260,50 @@ export default function HomePage() {
   const [dismissedGarmentIds, setDismissedGarmentIds] = useState<string[]>([]);
   const [, setFeedbackReasons] = useState<Record<string, string>>({});
   const [catalogGarments, setCatalogGarments] = useState<Garment[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogLoadedForUser, setCatalogLoadedForUser] = useState<string | null>(null);
   const [catalogOffsets, setCatalogOffsets] = useState<Record<Category, number>>({ top: 0, bottom: 0, dress: 0, outerwear: 0, shoe: 0, accessory: 0 });
   const [activeProductTag, setActiveProductTag] = useState<string | null>(null);
   const [signatureSlotByCategory, setSignatureSlotByCategory] = useState<Partial<Record<Category, string>>>({});
   const [hiddenSignatureCategories, setHiddenSignatureCategories] = useState<Category[]>([]);
   const [catalogSearchCounts, setCatalogSearchCounts] = useState<Record<Category, number>>(emptyCatalogSearchCounts);
 
-  const baseGarments = useMemo(() => soundrobeResult ? adaptGarments(soundrobeResult) : fallbackGarments, [soundrobeResult]);
-  const garments = useMemo(() => {
-    const byId = new Map<string, Garment>();
-    for (const garment of baseGarments) byId.set(garment.id, garment);
-    for (const garment of catalogGarments) byId.set(garment.id, garment);
-    for (const id of dismissedGarmentIds) byId.delete(id);
-    return Array.from(byId.values());
-  }, [baseGarments, catalogGarments, dismissedGarmentIds]);
+const generatedGarments = useMemo(
+  () => soundrobeResult ? adaptGarments(soundrobeResult) : [],
+  [soundrobeResult]
+);
+
+const garments = useMemo(() => {
+  const source =
+    catalogGarments.length > 0
+      ? catalogGarments
+      : generatedGarments.length > 0
+        ? generatedGarments
+        : fallbackGarments;
+
+  const dismissed = new Set(dismissedGarmentIds);
+
+  return sortByMatchScore(
+    source.filter((garment) => !dismissed.has(garment.id))
+  );
+}, [catalogGarments, generatedGarments, dismissedGarmentIds]);
+
   const lookPresets = useMemo(() => soundrobeResult ? adaptOutfits(soundrobeResult) : fallbackLooks, [soundrobeResult]);
   const defaultLook = lookPresets[0] ?? fallbackLook;
   const musicProfile = useMemo(() => soundrobeResult ? adaptMusicProfile(soundrobeResult) : fallbackMusicProfile, [soundrobeResult]);
   const styleProfile = useMemo(() => soundrobeResult ? adaptStyleProfile(soundrobeResult) : fallbackStyleProfile, [soundrobeResult]);
   const rawSignatureGarments = useMemo(() => {
-    return soundrobeResult ? adaptAllSignatureGarments(soundrobeResult) : sortByMatchScore(garments);
-  }, [soundrobeResult, garments]);
+  if (catalogGarments.length > 0) {
+    return sortByMatchScore(catalogGarments);
+  }
+
+  if (soundrobeResult) {
+    return adaptAllSignatureGarments(soundrobeResult);
+  }
+
+  return sortByMatchScore(fallbackGarments);
+  }, [catalogGarments, soundrobeResult]);
+
   const allSignatureGarments = useMemo(() => {
     const dismissed = new Set(dismissedGarmentIds);
     return rawSignatureGarments.filter((garment) => !dismissed.has(garment.id));
@@ -421,6 +444,7 @@ export default function HomePage() {
     setActiveProductTag(null);
   }, [handleSetNowPlayingIndex]);
 
+  
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("soundrobe-saved-garments", JSON.stringify(savedGarments));
@@ -987,6 +1011,99 @@ export default function HomePage() {
     }
   };
 
+  useEffect(() => {
+    const userId = soundrobeResult?.user.id;
+
+    if (!userId || catalogLoadedForUser === userId) return;
+
+    let cancelled = false;
+
+    const loadInitialCatalog = async () => {
+      setCatalogLoading(true);
+
+      try {
+        const params = new URLSearchParams({
+          limit: "100",
+          offset: "0",
+        });
+
+        const response = await fetch(`/api/products?${params.toString()}`, {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Products request failed: ${response.status}`);
+        }
+
+        const payload = await response.json() as {
+          products?: ProductCandidate[];
+        };
+
+        if (cancelled) return;
+
+        const realGarments = (payload.products ?? []).map(garmentFromProduct);
+
+        setCatalogGarments(realGarments);
+        setCatalogLoadedForUser(userId);
+
+        const ranked = sortByMatchScore(realGarments);
+
+        const categoryOrder: Category[] = [
+          "outerwear",
+          "top",
+          "bottom",
+          "dress",
+          "shoe",
+          "accessory",
+        ];
+
+        const selected: Garment[] = [];
+
+        for (const category of categoryOrder) {
+          const garment = ranked.find(
+            (candidate) =>
+              candidate.category === category &&
+              !selected.some((item) => item.id === candidate.id)
+          );
+
+          if (garment) {
+            selected.push(garment);
+          }
+        }
+
+        const garmentIds = selected
+          .slice(0, 5)
+          .map((garment) => garment.id);
+
+        if (garmentIds.length > 0) {
+          setCurrentLook({
+            id: `catalog-look-${userId}`,
+            name: "YOUR SOUNDROBE",
+            garmentIds,
+            description: "",
+          });
+
+          setSelectedGarmentId(garmentIds[0]);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Could not load initial product catalog", error);
+        }
+      } finally {
+        if (!cancelled) {
+          setCatalogLoading(false);
+        }
+      }
+    };
+
+    void loadInitialCatalog();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [soundrobeResult?.user.id, catalogLoadedForUser]);
+
+  
   const renderScreen = () => {
     if (screen === "home") {
       return (
