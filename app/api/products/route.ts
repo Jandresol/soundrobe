@@ -20,6 +20,10 @@ export async function GET(request: NextRequest) {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+  const queries = (searchParams.get("queries") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 
   if (!categories.length) {
     return NextResponse.json({ products: [] });
@@ -27,6 +31,7 @@ export async function GET(request: NextRequest) {
 
   const products = await listSupabaseProducts({
     categories,
+    queries,
     garmentTypes,
     offset: Number.isFinite(offset) ? offset : 0,
     limit: Number.isFinite(limit) ? limit : 24,

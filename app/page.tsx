@@ -51,7 +51,7 @@ const analysisSteps = [
 ];
 
 const defaultTimeWeights = { longTerm: 50, mediumTerm: 30, shortTerm: 20 };
-const soundrobeCacheVersion = "v13";
+const soundrobeCacheVersion = "v14";
 const soundrobeCacheTtlMs = 24 * 60 * 60 * 1000;
 const placeholderPalettes: Record<Category, string[]> = {
   top: ["#151821", "#e64aa0", "#ffd3e8"],
@@ -137,6 +137,15 @@ function garmentTypesForCategory(result: SoundrobeResult | null, category: Categ
   ));
 }
 
+function searchQueriesForCategory(result: SoundrobeResult | null, category: Category) {
+  return Array.from(new Set(
+    (result?.garmentIntents ?? [])
+      .filter((intent) => intentMatchesUiCategory(intent.category, category))
+      .map((intent) => intent.searchQuery)
+      .filter(Boolean)
+  ));
+}
+
 function expandGarmentTypeForCatalog(garmentType: string) {
   const normalized = garmentType.toLowerCase();
   const expansions: Record<string, string[]> = {
@@ -169,19 +178,21 @@ function scoreCatalogProducts(products: ProductCandidate[], result: SoundrobeRes
   const recommendations = new Map<string, ProductRecommendation>();
 
   for (const product of products) {
+    const stableProductId = stableCatalogProductId(product);
     for (const intent of result.garmentIntents) {
       if (!intentMatchesProductCategory(intent.category, product.attributes.category)) continue;
       const productForIntent: ProductCandidate = {
         ...product,
+        id: stableProductId,
         attributes: {
           ...product.attributes,
           category: intent.category,
         },
       };
       const scored = scoreProduct(productForIntent, intent, result.metadata.shoppingPreferences);
-      const previous = recommendations.get(product.id);
+      const previous = recommendations.get(stableProductId);
       if (!previous || scored.score > previous.score) {
-        recommendations.set(product.id, {
+        recommendations.set(stableProductId, {
           product: productForIntent,
           intent,
           score: scored.score,
@@ -196,6 +207,19 @@ function scoreCatalogProducts(products: ProductCandidate[], result: SoundrobeRes
       .filter((recommendation) => recommendation.score > 0)
       .map(garmentFromRecommendation)
   );
+}
+
+function stableCatalogProductId(product: ProductCandidate) {
+  const source = product.productUrl || `${product.retailer}:${product.title}:${product.price ?? ""}`;
+  return `${product.id}-${hashString(source)}`;
+}
+
+function hashString(value: string) {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(index);
+  }
+  return Math.abs(hash >>> 0).toString(36);
 }
 
 function buildLookGarmentsFromRankedCatalog(ranked: Garment[]) {
@@ -991,6 +1015,8 @@ const garments = useMemo(() => {
       offset: String(offset),
       limit: String(catalogPageLimit),
     });
+    const queries = searchQueriesForCategory(soundrobeResult, category);
+    if (queries.length) params.set("queries", queries.join(","));
     const garmentTypes = garmentTypesForCategory(soundrobeResult, category);
     if (garmentTypes.length) params.set("garmentTypes", garmentTypes.join(","));
     const response = await fetch(`/api/products?${params.toString()}`, { cache: "no-store" });
@@ -1000,8 +1026,8 @@ const garments = useMemo(() => {
     const nextGarments = scoreCatalogProducts(nextProducts, soundrobeResult).filter((garment) => garment.category === category);
     setCatalogOffsets((previous) => ({ ...previous, [category]: offset + nextProducts.length }));
     setCatalogProducts((previous) => {
-      const byId = new Map(previous.map((product) => [product.id, product]));
-      for (const product of nextProducts) byId.set(product.id, product);
+      const byId = new Map(previous.map((product) => [stableCatalogProductId(product), product]));
+      for (const product of nextProducts) byId.set(stableCatalogProductId(product), product);
       return Array.from(byId.values());
     });
     return nextGarments;
@@ -1232,6 +1258,8 @@ const garments = useMemo(() => {
               offset: "0",
               limit: String(initialCatalogLimitPerCategory),
             });
+            const queries = searchQueriesForCategory(soundrobeResult, category);
+            if (queries.length) params.set("queries", queries.join(","));
             const garmentTypes = garmentTypesForCategory(soundrobeResult, category);
             if (garmentTypes.length) params.set("garmentTypes", garmentTypes.join(","));
 
@@ -1266,7 +1294,7 @@ const garments = useMemo(() => {
           }), {} as Record<Category, number>)
         );
 
-        const dedupedProducts = Array.from(new Map(products.map((product) => [product.id, product])).values());
+        const dedupedProducts = Array.from(new Map(products.map((product) => [stableCatalogProductId(product), product])).values());
         const realGarments = scoreCatalogProducts(dedupedProducts, soundrobeResult);
         setCatalogProducts(dedupedProducts);
         setCatalogLoadedForUser(catalogLoadKey);
@@ -1991,7 +2019,7 @@ const garments = useMemo(() => {
             <Panel title="SIGNATURE PIECES">
               {signatureGarments.length > 0 ? (
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  {signatureGarments.map((garment) => {
+                  {signatureGarments.map((garment, index) => {
                     const exactInLook = displayedCurrentLook.garmentIds.includes(garment.id);
                     const sameCategoryInLook = displayedCurrentLook.garmentIds.some((id) => {
                       const inLook = garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
@@ -2000,7 +2028,7 @@ const garments = useMemo(() => {
 
                     return (
                       <GarmentCard
-                        key={`signature-${garment.category}`}
+                        key={`signature-${garment.category}-${garment.id}-${index}`}
                         garment={garment}
                         isSelected={selectedGarmentId === garment.id}
                         isInLook={exactInLook}
@@ -2135,11 +2163,11 @@ const garments = useMemo(() => {
                   </button>
                   <div className="max-h-[420px] overflow-y-auto pr-1">
                     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                      {selectedCategoryFilteredGarments.length ? selectedCategoryFilteredGarments.map((garment) => {
+                      {selectedCategoryFilteredGarments.length ? selectedCategoryFilteredGarments.map((garment, index) => {
                         const isInLook = displayedCurrentLook.garmentIds.includes(garment.id);
                         return (
                           <button
-                            key={garment.id}
+                            key={`${selectedCategory}-${garment.id}-${index}`}
                             type="button"
                             onClick={() => toggleCurrentLookGarment(garment)}
                             className={`catalog-tile grid min-w-0 grid-cols-[72px_minmax(0,1fr)] gap-2 border-2 p-2 text-left text-[10px] font-bold uppercase ${

@@ -42,6 +42,8 @@ type SupabaseProductRow = {
 
 type SupabaseProductSearchRow = {
   id: string;
+  query: string;
+  canonical_key: string;
   intent_category: string | null;
   intent_garment_type: string | null;
   fetched_at: string;
@@ -116,11 +118,13 @@ export async function writeSupabaseProductSearchCache(record: ProductSearchCache
 
 export async function listSupabaseProducts({
   categories,
+  queries = [],
   garmentTypes = [],
   offset = 0,
   limit = 24,
 }: {
   categories: string[];
+  queries?: string[];
   garmentTypes?: string[];
   offset?: number;
   limit?: number;
@@ -130,6 +134,7 @@ export async function listSupabaseProducts({
 
   const searchProducts = await listSupabaseProductsFromSearchResults(config, {
     categories,
+    queries,
     garmentTypes,
     offset,
     limit,
@@ -143,24 +148,30 @@ async function listSupabaseProductsFromSearchResults(
   config: SupabaseConfig,
   {
     categories,
+    queries = [],
     garmentTypes = [],
     offset = 0,
     limit = 24,
   }: {
     categories: string[];
+    queries?: string[];
     garmentTypes?: string[];
     offset?: number;
     limit?: number;
   },
 ): Promise<ProductCandidate[]> {
   const searchParams = new URLSearchParams({
-    select: "id,intent_category,intent_garment_type,fetched_at",
+    select: "id,query,canonical_key,intent_category,intent_garment_type,fetched_at",
     intent_category: `in.(${categories.join(",")})`,
     expires_at: `gte.${new Date().toISOString()}`,
     order: "fetched_at.desc",
     limit: "80",
   });
-  if (garmentTypes.length) searchParams.set("or", `(${garmentTypes.flatMap(intentGarmentTypeFilters).join(",")})`);
+  const filters = [
+    ...queries.flatMap(searchQueryFilters),
+    ...garmentTypes.flatMap(intentGarmentTypeFilters),
+  ];
+  if (filters.length) searchParams.set("or", `(${filters.join(",")})`);
 
   const searchResponse = await fetch(`${config.url}/rest/v1/product_searches?${searchParams.toString()}`, {
     headers: supabaseHeaders(config),
@@ -171,7 +182,7 @@ async function listSupabaseProductsFromSearchResults(
   const searches = await searchResponse.json() as SupabaseProductSearchRow[];
   if (!searches.length) return [];
 
-  const orderedSearches = orderSearchesByIntent(searches, garmentTypes);
+  const orderedSearches = orderSearchesByIntent(searches, { queries, garmentTypes });
   const searchIds = orderedSearches.map((search) => search.id);
   const resultParams = new URLSearchParams({
     select: "search_id,product_id,position,source_rank,products(id,provider_product_id,retailer,brand,title,price,currency,image_url,product_url,availability,category,garment_type,colors,materials,aesthetics)",
@@ -242,14 +253,27 @@ async function listSupabaseProductsFlat(
   return rows.map(productFromRow);
 }
 
-function orderSearchesByIntent(searches: SupabaseProductSearchRow[], garmentTypes: string[]) {
-  if (!garmentTypes.length) return searches;
+function orderSearchesByIntent(searches: SupabaseProductSearchRow[], { queries, garmentTypes }: { queries: string[]; garmentTypes: string[] }) {
+  if (!queries.length && !garmentTypes.length) return searches;
+  const normalizedQueries = queries.map(normalizeSearchValue);
   const normalizedGarmentTypes = garmentTypes.map((garmentType) => garmentType.toLowerCase());
   return [...searches].sort((a, b) => {
-    const left = intentPriority((a.intent_garment_type ?? "").toLowerCase(), normalizedGarmentTypes);
-    const right = intentPriority((b.intent_garment_type ?? "").toLowerCase(), normalizedGarmentTypes);
-    return left - right || Date.parse(b.fetched_at) - Date.parse(a.fetched_at);
+    const leftQuery = Math.min(queryPriority(a.query, normalizedQueries), queryPriority(a.canonical_key, normalizedQueries));
+    const rightQuery = Math.min(queryPriority(b.query, normalizedQueries), queryPriority(b.canonical_key, normalizedQueries));
+    const leftIntent = intentPriority((a.intent_garment_type ?? "").toLowerCase(), normalizedGarmentTypes);
+    const rightIntent = intentPriority((b.intent_garment_type ?? "").toLowerCase(), normalizedGarmentTypes);
+    return leftQuery - rightQuery || leftIntent - rightIntent || Date.parse(b.fetched_at) - Date.parse(a.fetched_at);
   });
+}
+
+function queryPriority(value: string, orderedQueries: string[]) {
+  const normalizedValue = normalizeSearchValue(value);
+  const index = orderedQueries.findIndex((query) =>
+    normalizedValue === query ||
+    normalizedValue.includes(query) ||
+    query.includes(normalizedValue)
+  );
+  return index >= 0 ? index : 999;
 }
 
 export function intentPriority(value: string, orderedGarmentTypes: string[]) {
@@ -259,6 +283,22 @@ export function intentPriority(value: string, orderedGarmentTypes: string[]) {
     garmentType.includes(value)
   );
   return index >= 0 ? index : 999;
+}
+
+function searchQueryFilters(value: string) {
+  const normalized = normalizeSearchValue(value);
+  const escaped = normalized.replaceAll("\"", "\\\"");
+  const loose = normalized.replaceAll("*", "").replaceAll(",", " ");
+  return [
+    `canonical_key.eq."${escaped}"`,
+    `query.eq."${escaped}"`,
+    `canonical_key.ilike.*${loose}*`,
+    `query.ilike.*${loose}*`,
+  ];
+}
+
+function normalizeSearchValue(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function intentGarmentTypeFilters(value: string) {
