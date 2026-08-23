@@ -214,7 +214,7 @@ export default function HomePage() {
   const [screen, setScreen] = useState<Screen>("home");
   const [soundrobeResult, setSoundrobeResult] = useState<SoundrobeResult | null>(null);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
-  const [spotifyMessage, setSpotifyMessage] = useState("Demo music ready");
+  const [spotifyMessage, setSpotifyMessage] = useState("Connect to Spotify");
   const [flowError, setFlowError] = useState<string | null>(null);
   const [analysisMusicSource, setAnalysisMusicSource] = useState<"spotify" | "demo">("demo");
   const [timeWeights, setTimeWeights] = useState(defaultTimeWeights);
@@ -1005,7 +1005,6 @@ export default function HomePage() {
                 ) : (
                   <>
                     <RetroButton variant="primary" size="lg" onClick={handleSpotifyConnect}>CONNECT MUSIC</RetroButton>
-                    <RetroButton variant="secondary" size="lg" onClick={handleDemoStart}>TRY DEMO</RetroButton>
                   </>
                 )}
               </div>
@@ -1732,8 +1731,14 @@ export default function HomePage() {
                   </label>
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="border-2 border-[#202020] bg-white px-3 py-2 text-[12px] font-bold uppercase">
-                      ${currentLook.garmentIds.reduce((sum, id) => sum + (garments.find((item) => item.id === id)?.price ?? 0), 0)}
-                    </div>
+                      ${currentLook.garmentIds
+                        .reduce(
+                          (sum, id) =>
+                            sum + (garments.find((item) => item.id === id)?.price ?? 0),
+                          0
+                        )
+                        .toFixed(2)}
+                      </div>
                     <RetroButton variant="secondary" onClick={() => setScreen("dna")}>TUNE MUSIC DNA</RetroButton>
                     <RetroButton onClick={handleRemix}>REMIX</RetroButton>
                     <RetroButton onClick={handleSaveSelectedPiece}>SAVE PIECE</RetroButton>
