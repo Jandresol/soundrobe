@@ -13,6 +13,7 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import { RetroButton } from "@/components/ui/RetroButton";
 import { adaptGarments, adaptAllSignatureGarments, adaptMusicProfile, adaptOutfits, adaptStyleProfile, garmentFromRecommendation } from "@/lib/result-adapter";
 import type { ProductCandidate, ProductRecommendation } from "@/src/domain/commerce/types";
+import type { MusicProfile as DomainMusicProfile } from "@/src/domain/music/types";
 import { scoreProduct } from "@/src/engine/ranking/scoreProduct";
 import { defaultLook as fallbackLook, garments as fallbackGarments, lookPresets as fallbackLooks, musicProfile as fallbackMusicProfile, styleProfile as fallbackStyleProfile } from "@/lib/mock-data";
 import type { SoundrobeResult } from "@/src/domain/soundrobe/types";
@@ -35,7 +36,7 @@ const categoryTabs: Array<{ label: string; value: Category }> = [
   { label: "ACCESSORIES", value: "accessory" },
 ];
 
-const signatureCategoryOrder: Category[] = ["outerwear", "top", "bottom", "dress", "shoe", "accessory"];
+const signatureCategoryOrder: Category[] = ["outerwear", "top", "bottom", "shoe", "accessory", "dress"];
 const initialCatalogLimitPerCategory = 120;
 const catalogPageLimit = 48;
 
@@ -51,8 +52,9 @@ const analysisSteps = [
 ];
 
 const defaultTimeWeights = { longTerm: 50, mediumTerm: 30, shortTerm: 20 };
-const soundrobeCacheVersion = "v14";
+const soundrobeCacheVersion = "v18";
 const soundrobeCacheTtlMs = 24 * 60 * 60 * 1000;
+const staleSoundrobeCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
 const placeholderPalettes: Record<Category, string[]> = {
   top: ["#151821", "#e64aa0", "#ffd3e8"],
   bottom: ["#202020", "#7b6aa8", "#d8dbe2"],
@@ -70,6 +72,14 @@ type CachedSoundrobeResult = {
   result: SoundrobeResult;
 };
 
+type CachedMusicProfile = {
+  cachedAt: number;
+  source: "spotify";
+  userId: string;
+  displayName: string;
+  profile: DomainMusicProfile;
+};
+
 function weightsKey(weights: typeof defaultTimeWeights) {
   return `${weights.longTerm}-${weights.mediumTerm}-${weights.shortTerm}`;
 }
@@ -82,6 +92,10 @@ function cacheResultKey(source: "spotify" | "demo", userId: string, weights: typ
   return `soundrobe-result:${soundrobeCacheVersion}:${source}:${userId}:${weightsKey(weights)}`;
 }
 
+function musicProfileCacheKey(source: "spotify") {
+  return `soundrobe-music-profile:${soundrobeCacheVersion}:${source}`;
+}
+
 function sortByMatchScore(garments: Garment[]) {
   return [...garments].sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
 }
@@ -90,7 +104,7 @@ const minimumInitialLookMatchByCategory: Record<Category, number> = {
   outerwear: 45,
   top: 60,
   bottom: 42,
-  dress: 42,
+  dress: 78,
   shoe: 35,
   accessory: 35,
 };
@@ -158,10 +172,19 @@ function expandGarmentTypeForCatalog(garmentType: string) {
     "statement flared trouser": ["statement flared trouser", "wide-leg trouser", "flare jeans", "bell bottoms"],
     "detailed tailored trouser": ["detailed tailored trouser", "tailored trouser", "wide-leg trouser"],
     "satin cowl top": ["satin cowl top", "cowl top", "draped top", "satin blouse", "silk cami"],
+    "draped halter top": ["draped halter top", "halter top", "satin cowl top", "silk cami"],
+    "asymmetric one-shoulder top": ["asymmetric one-shoulder top", "asymmetric top", "asymmetric fitted top"],
     "asymmetric fitted top": ["asymmetric fitted top", "asymmetric top", "corset-detail top", "mesh long sleeve"],
-    "distressed fitted graphic tee": ["distressed fitted graphic tee", "graphic baby tee", "goth baby tee", "tattoo graphic baby tee", "band tee"],
+    "distressed fitted graphic tee": ["distressed fitted graphic tee", "graphic baby tee", "tattoo graphic baby tee", "band tee"],
+    "jumpsuit": ["jumpsuit", "satin jumpsuit", "slinky midi dress", "draped jersey dress"],
+    "slinky midi dress": ["slinky midi dress", "draped jersey dress", "simple slip dress"],
+    "draped jersey dress": ["draped jersey dress", "slinky midi dress", "simple slip dress"],
+    "black leather loafers": ["black leather loafers", "loafers", "distinctive loafers"],
     "sculptural gold earrings": ["sculptural gold earrings", "gold hoops", "gold jewelry", "statement jewelry"],
+    "sculptural silver jewelry": ["sculptural silver jewelry", "silver jewelry", "statement jewelry"],
     "statement belt": ["statement belt", "studded belt", "grommet belt", "leather belt"],
+    "metallic evening bag": ["metallic evening bag", "metallic clutch", "mini bag"],
+    "structured vintage handbag": ["structured vintage handbag", "top-handle bag", "compact shoulder bag"],
     "unusual leather bag": ["unusual leather bag", "compact shoulder bag", "slouchy leather bag", "hardware shoulder bag"],
   };
   return expansions[normalized] ?? [garmentType];
@@ -223,7 +246,7 @@ function hashString(value: string) {
 }
 
 function buildLookGarmentsFromRankedCatalog(ranked: Garment[]) {
-  const categoryOrder: Category[] = ["outerwear", "top", "bottom", "dress", "shoe", "accessory"];
+  const categoryOrder: Category[] = ["outerwear", "top", "bottom", "shoe", "accessory", "dress"];
   const selected: Garment[] = [];
 
   for (const category of categoryOrder) {
@@ -311,6 +334,69 @@ function readCachedSoundrobe(source: "spotify" | "demo", weights: typeof default
   }
 }
 
+function readFallbackCachedSoundrobe(source: "spotify" | "demo") {
+  if (typeof window === "undefined") return null;
+  try {
+    const cachedResults: CachedSoundrobeResult[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key?.startsWith(`soundrobe-result:${soundrobeCacheVersion}:${source}:`)) continue;
+      if (key.endsWith(":latest")) continue;
+      const cached = JSON.parse(window.localStorage.getItem(key) ?? "null") as CachedSoundrobeResult | null;
+      if (!cached || cached.source !== source) continue;
+      if (Date.now() - cached.cachedAt > staleSoundrobeCacheTtlMs) continue;
+      cachedResults.push(cached);
+    }
+    cachedResults.sort((a, b) => b.cachedAt - a.cachedAt);
+    return cachedResults[0]?.result ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readCachedMusicProfile(source: "spotify") {
+  if (typeof window === "undefined") return null;
+  try {
+    const cached = JSON.parse(window.localStorage.getItem(musicProfileCacheKey(source)) ?? "null") as CachedMusicProfile | null;
+    if (!cached || cached.source !== source || !isClientMusicProfile(cached.profile)) return null;
+    if (Date.now() - cached.cachedAt > staleSoundrobeCacheTtlMs) return null;
+    return cached;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedMusicProfile(result: SoundrobeResult) {
+  if (typeof window === "undefined" || result.metadata.musicSource !== "spotify") return;
+  const payload: CachedMusicProfile = {
+    cachedAt: Date.now(),
+    source: "spotify",
+    userId: result.user.id,
+    displayName: result.user.displayName,
+    profile: result.musicProfile,
+  };
+  try {
+    window.localStorage.setItem(musicProfileCacheKey("spotify"), JSON.stringify(payload));
+  } catch {
+  }
+}
+
+function isClientMusicProfile(value: DomainMusicProfile | null | undefined): value is DomainMusicProfile {
+  return Boolean(
+    value?.id &&
+    value.displayName &&
+    value.shortTerm &&
+    value.mediumTerm &&
+    value.longTerm &&
+    Array.isArray(value.shortTerm.artists) &&
+    Array.isArray(value.mediumTerm.artists) &&
+    Array.isArray(value.longTerm.artists) &&
+    Array.isArray(value.shortTerm.tracks) &&
+    Array.isArray(value.mediumTerm.tracks) &&
+    Array.isArray(value.longTerm.tracks),
+  );
+}
+
 function compactCachedSoundrobeResult(result: SoundrobeResult): SoundrobeResult {
   const compactRange = (range: SoundrobeResult["musicProfile"]["shortTerm"]) => ({
     artists: range.artists.slice(0, 30).map((artist) => ({
@@ -371,6 +457,7 @@ function clearSoundrobeResultCache() {
 
 function writeCachedSoundrobe(result: SoundrobeResult, weights: typeof defaultTimeWeights) {
   if (typeof window === "undefined") return;
+  writeCachedMusicProfile(result);
   const source = result.metadata.musicSource;
   const key = cacheResultKey(source, result.user.id, weights);
   const payload: CachedSoundrobeResult = {
@@ -598,7 +685,7 @@ const garments = useMemo(() => {
     for (const garment of kept) {
       byCategory.set(garment.category, garment);
     }
-    const garmentIds = (["outerwear", "dress", "top", "bottom", "shoe", "accessory"] as Category[])
+    const garmentIds = (["outerwear", "top", "bottom", "shoe", "accessory", "dress"] as Category[])
       .map((category) => byCategory.get(category))
       .filter((garment): garment is Garment => Boolean(garment))
       .slice(0, 5)
@@ -655,6 +742,9 @@ const garments = useMemo(() => {
     setSignatureSlotByCategory({});
     setHiddenSignatureCategories([]);
     setActiveProductTag(null);
+    setCatalogProducts([]);
+    setCatalogLoadedForUser(null);
+    setCatalogOffsets({ top: 0, bottom: 0, dress: 0, outerwear: 0, shoe: 0, accessory: 0 });
   }, [catalogProducts, handleSetNowPlayingIndex]);
 
   
@@ -824,6 +914,14 @@ const garments = useMemo(() => {
         setScreen("soundrobe");
       } catch (error) {
         if (!cancelled) {
+          const fallbackResult = analysisMusicSource === "spotify" ? readFallbackCachedSoundrobe("spotify") : null;
+          if (fallbackResult) {
+            applySoundrobeResult(fallbackResult, "Spotify is rate limited. Loaded your latest cached Soundrobe.");
+            setAnalysisIndex(analysisSteps.length - 1);
+            setAnalysisProgress(100);
+            setScreen("dna");
+            return;
+          }
           setSpotifyConnected(false);
           const message = error instanceof Error ? error.message : "Could not build your Soundrobe. Try again.";
           setFlowError(message);

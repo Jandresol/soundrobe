@@ -50,7 +50,7 @@ export function generateGarmentIntents(styleProfile: StyleProfile, palette: Pale
     .map((signal) => ({
       signal,
       category: GARMENT_CATEGORY[signal.id],
-      score: scoreIntentSignal(signal, styleProfile),
+      score: scoreIntentSignal(signal, styleProfile) * profileFitMultiplier(signal, GARMENT_CATEGORY[signal.id], styleProfile),
     }))
     .filter((entry): entry is IntentCandidate => Boolean(entry.category));
   const picked: IntentCandidate[] = [];
@@ -77,12 +77,12 @@ export function generateGarmentIntents(styleProfile: StyleProfile, palette: Pale
     addPicked(entry);
   }
 
-  return picked.map(({ signal, category, fallbackSource }) => {
+  return picked.map(({ signal, category, fallbackSource, score }) => {
     const sources = styleProfile.sourcesBySignal[signal.id] ?? (fallbackSource ? [fallbackSource] : []);
     const sourceColor = selectIntentColor(signal, category, colors, styleProfile);
-    const sourceMaterial = selectIntentMaterial(signal, materials);
+    const sourceMaterial = selectIntentMaterial(signal, category, materials);
     const intentAesthetics = selectIntentSignals(aesthetics, signal.label, 3);
-    const queryParts = [departmentQuery(department), sourceColor, sourceMaterial, signal.label].filter(Boolean);
+    const searchQuery = buildSearchQuery(department, sourceColor, sourceMaterial, signal.label);
     return {
       id: `intent-${signal.id.replaceAll(" ", "-")}`,
       category,
@@ -93,8 +93,8 @@ export function generateGarmentIntents(styleProfile: StyleProfile, palette: Pale
       aesthetics: intentAesthetics,
       eras,
       musicSources: sources,
-      priority: Math.min(100, Math.round(scoreIntentSignal(signal, styleProfile))),
-      searchQuery: queryParts.join(" "),
+      priority: Math.min(100, Math.round(score)),
+      searchQuery,
       department,
     };
   });
@@ -105,6 +105,23 @@ function scoreIntentSignal(signal: WeightedSignal, styleProfile: StyleProfile) {
   const sourceCoverage = unique(sources.map((source) => source.id)).length;
   const sourceWeight = sources.reduce((sum, source) => sum + source.weight, 0) / Math.max(sources.length, 1);
   return signal.weight * 0.72 + Math.min(20, sourceCoverage * 4) + sourceWeight * 0.08;
+}
+
+function profileFitMultiplier(signal: WeightedSignal, category: GarmentCategory | undefined, styleProfile: StyleProfile) {
+  if (category !== "dress") return 1;
+  const label = signal.id.toLowerCase();
+  const sourceIds = (styleProfile.sourcesBySignal[signal.id] ?? []).map((source) => source.id.toLowerCase());
+  const sourceLabels = (styleProfile.sourcesBySignal[signal.id] ?? []).map((source) => source.label.toLowerCase());
+  const sourceText = [...sourceIds, ...sourceLabels].join(" ");
+  const hasGlossyRnbDisco = [...styleProfile.traits, ...styleProfile.aesthetics].some((entry) =>
+    ["glossy", "confident", "sensual", "nightlife", "polished"].includes(entry.id) && entry.weight >= 55
+  ) || Object.values(styleProfile.sourcesBySignal).some((sources) =>
+    sources.some((source) => ["disco", "funk", "soul", "r&b", "club", "1980s"].some((token) => source.id.toLowerCase().includes(token) || source.label.toLowerCase().includes(token)))
+  );
+  if (!hasGlossyRnbDisco) return 1;
+  if (["jumpsuit", "satin jumpsuit", "slinky midi dress", "draped jersey dress", "satin mini dress", "halter mini dress"].includes(label)) return 1.45;
+  if ((label.includes("slip dress") || label.includes("lace")) && /(riot|goth|punk|grunge|dark)/.test(sourceText)) return 0.22;
+  return 1;
 }
 
 function buildFallbackCandidate(category: GarmentCategory, styleProfile: StyleProfile): IntentCandidate {
@@ -150,25 +167,79 @@ function buildFallbackCandidate(category: GarmentCategory, styleProfile: StylePr
 }
 
 function selectIntentColor(signal: WeightedSignal, category: GarmentCategory, colors: string[], styleProfile: StyleProfile) {
-  if (!colors.length) return "black";
+  const colorOptions = colors.filter((color) => !materialLikeColorTerms.has(color));
+  if (!colorOptions.length) return "black";
   const label = signal.label.toLowerCase();
-  if (category === "jewelry") return colors.find((color) => ["gold", "silver"].includes(color)) ?? "gold";
-  if (category === "shoes" || category === "bag") return colors.find((color) => ["black", "brown", "chocolate", "cream", "white", "silver"].includes(color)) ?? colors[0];
-  if (label.includes("denim") || label.includes("jeans")) return colors.find((color) => color.includes("denim")) ?? "denim";
+  if (category === "jewelry") return colorOptions.find((color) => ["gold", "silver"].includes(color)) ?? "gold";
+  if (category === "shoes" || category === "bag") return colorOptions.find((color) => ["black", "brown", "chocolate", "cream", "white", "silver"].includes(color)) ?? colorOptions[0];
+  if (label.includes("denim") || label.includes("jeans")) return colorOptions.find((color) => color.includes("denim")) ?? "denim";
   const signalSources = new Set((styleProfile.sourcesBySignal[signal.id] ?? []).map((source) => source.id));
-  const sourcedColor = colors.find((color) => (styleProfile.sourcesBySignal[color] ?? []).some((source) => signalSources.has(source.id)));
-  return sourcedColor ?? colors[0];
+  const sourcedColor = colorOptions.find((color) => (styleProfile.sourcesBySignal[color] ?? []).some((source) => signalSources.has(source.id)));
+  return sourcedColor ?? colorOptions[0];
 }
 
-function selectIntentMaterial(signal: WeightedSignal, materials: string[]) {
+function selectIntentMaterial(signal: WeightedSignal, category: GarmentCategory, materials: string[]) {
   const label = signal.label.toLowerCase();
+  if (category === "jewelry") return "";
+  if (materials.some((material) => labelHasTerm(label, material))) return "";
   const direct = materials.find((material) => label.includes(material) || material.includes(label));
   if (direct) return direct;
   if (label.includes("jacket") || label.includes("boots") || label.includes("bag")) return materials.find((material) => ["leather", "suede", "nylon", "denim"].includes(material)) ?? "";
   if (label.includes("tee") || label.includes("shirt") || label.includes("tank")) return materials.find((material) => ["cotton", "mesh", "rib knit", "satin"].includes(material)) ?? "";
+  if (label.includes("jumpsuit")) return materials.find((material) => ["satin", "jersey", "leather", "metallic", "cotton"].includes(material)) ?? "satin";
   if (label.includes("dress") || label.includes("skirt")) return materials.find((material) => ["satin", "lace", "mesh", "cotton"].includes(material)) ?? "";
   return materials[0] ?? "";
 }
+
+function buildSearchQuery(department: FashionDepartment, color: string, material: string, garmentType: string) {
+  const garment = garmentType.toLowerCase();
+  const safeColor = color && !materialLikeColorTerms.has(color) && !labelHasTerm(garment, color) ? color : "";
+  const safeMaterial = material && !labelHasTerm(garment, material) ? material : "";
+  return uniqueSearchTerms([departmentQuery(department), safeColor, safeMaterial, garmentType]).join(" ");
+}
+
+function labelHasTerm(label: string, term: string) {
+  const normalizedLabel = normalizeSearchTerm(label);
+  const normalizedTerm = normalizeSearchTerm(term);
+  return normalizedLabel.split(" ").includes(normalizedTerm) || normalizedLabel.includes(normalizedTerm);
+}
+
+function uniqueSearchTerms(parts: string[]) {
+  const tokens: string[] = [];
+  for (const part of parts.filter(Boolean)) {
+    for (const token of normalizeSearchTerm(part).split(" ")) {
+      if (!token || tokens[tokens.length - 1] === token) continue;
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
+
+function normalizeSearchTerm(value: string) {
+  return value.toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+const materialLikeColorTerms = new Set([
+  "cotton",
+  "denim",
+  "distressed denim",
+  "flannel",
+  "fuzzy knit",
+  "jersey",
+  "knit",
+  "lace",
+  "leather",
+  "mesh",
+  "metallic",
+  "nylon",
+  "patent",
+  "rib knit",
+  "satin",
+  "sequin",
+  "suede",
+  "washed denim",
+  "wool",
+]);
 
 function selectIntentSignals(signals: string[], garmentType: string, limit: number) {
   const garment = garmentType.toLowerCase();

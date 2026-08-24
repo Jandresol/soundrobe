@@ -9,13 +9,28 @@ export type CategoryFallbackAssociation = {
 
 export const categoryFallbackAssociations: CategoryFallbackAssociation[] = [
   {
+    id: "fallback-disco-rnb-nightlife",
+    signals: ["pop", "r&b", "soul", "funk", "disco", "club", "glossy", "confident", "sensual", "michael jackson"],
+    garments: {
+      outerwear: ["fitted leather jacket", "fitted blazer"],
+      top: ["draped halter top", "asymmetric one-shoulder top", "satin cowl top", "silk cami"],
+      bottom: ["statement flared trouser", "satin pants", "bias-cut satin skirt"],
+      dress: ["jumpsuit", "slinky midi dress", "draped jersey dress", "satin mini dress"],
+      shoes: ["black leather loafers", "pointed leather boots", "metallic heels", "kitten heels"],
+      bag: ["compact shoulder bag", "structured vintage handbag", "metallic evening bag"],
+      jewelry: ["sculptural silver jewelry", "gold hoops", "sculptural gold earrings"],
+      accessory: ["skinny scarf", "statement sunglasses", "statement belt"],
+    },
+    weight: 1.08,
+  },
+  {
     id: "fallback-rnb-sensual",
     signals: ["r&b", "contemporary r&b", "alternative r&b", "sensual", "slow jams"],
     garments: {
       outerwear: ["fitted blazer", "leather blazer"],
-      top: ["rib knit long sleeve", "silk cami", "corset top"],
+      top: ["draped halter top", "rib knit tank", "silk cami", "corset top"],
       bottom: ["slip skirt", "satin pants", "low-rise jeans"],
-      dress: ["slip dress", "bodycon dress"],
+      dress: ["draped jersey dress", "simple slip dress", "slinky midi dress"],
       shoes: ["kitten heels", "mules", "strappy sandals"],
       bag: ["compact shoulder bag", "flap bag"],
       jewelry: ["gold hoops", "chain necklace"],
@@ -25,18 +40,18 @@ export const categoryFallbackAssociations: CategoryFallbackAssociation[] = [
   },
   {
     id: "fallback-punk-rock-dark",
-    signals: ["punk", "rock", "alternative rock", "riot-grrrl", "metal", "hardcore", "goth", "dark"],
+    signals: ["punk", "riot-grrrl", "metal", "hardcore", "goth", "dark"],
     garments: {
       outerwear: ["worn leather moto jacket", "distressed leather jacket", "cropped leather jacket"],
       top: ["distressed fitted graphic tee", "goth baby tee", "mesh long sleeve"],
       bottom: ["leather trousers", "leather mini skirt", "plaid mini skirt"],
-      dress: ["lace slip dress", "asymmetrical mini dress"],
+      dress: ["asymmetrical mini dress", "lace slip dress"],
       shoes: ["engineer boots", "moto boots", "pointed leather boots"],
       bag: ["hardware shoulder bag", "slouchy leather bag"],
       jewelry: ["silver jewelry", "choker"],
       accessory: ["studded belt", "grommet belt"],
     },
-    weight: 1,
+    weight: 0.72,
   },
   {
     id: "fallback-pop-club-digital",

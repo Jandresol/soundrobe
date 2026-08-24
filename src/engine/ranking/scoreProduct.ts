@@ -187,6 +187,16 @@ const gothGraphicProductTokens = [
   "witch",
 ];
 
+const costumeGothProductTokens = [
+  "costume",
+  "gothic floral",
+  "halloween",
+  "punkdesign",
+  "punk design",
+  "vampire",
+  "witchy costume",
+];
+
 const cyberGraphicProductTokens = [
   "cyber",
   "cyber sigilism",
@@ -550,6 +560,12 @@ function missesContextualStyleWorld(text: string, desiredText: string) {
     return true;
   }
   if (includesAny(text, romanticProductTokens) && !includesAny(desiredText, romanticIntentTokens)) {
+    return true;
+  }
+  if (
+    includesAny(text, [...gothGraphicProductTokens, ...costumeGothProductTokens]) &&
+    !includesAny(desiredText, ["dark", "goth", "gothic", "industrial", "moody", "dramatic", "witchy", "mall goth", "whimsigoth"])
+  ) {
     return true;
   }
   if (includesAny(text, artistMerchProductTokens) && !includesAny(desiredText, artistMerchIntentTokens)) {

@@ -96,7 +96,7 @@ function selectSearchableIntents(garmentIntents: ReturnType<typeof generateGarme
     ["outerwear", 1],
     ["top", 2],
     ["bottom", 2],
-    ["dress", 1],
+    ["dress", 2],
     ["shoes", 2],
     ["bag", 1],
     ["jewelry", 1],
@@ -121,9 +121,11 @@ function selectSignaturePieces(rankedProducts: ProductRecommendation[], limit: n
   const seenProducts = new Set<string>();
   const seenCategories = new Set<string>();
   const seenIntents = new Set<string>();
+  const strongOptionalDressScore = 78;
 
   const add = (recommendation: ProductRecommendation) => {
     if (selected.length >= limit || seenProducts.has(recommendation.product.id)) return false;
+    if (recommendation.intent.category === "dress" && recommendation.score < strongOptionalDressScore) return false;
     selected.push(recommendation);
     seenProducts.add(recommendation.product.id);
     seenCategories.add(recommendation.intent.category);

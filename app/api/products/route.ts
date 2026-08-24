@@ -37,5 +37,15 @@ export async function GET(request: NextRequest) {
     limit: Number.isFinite(limit) ? limit : 24,
   });
 
-  return NextResponse.json({ products });
+  return NextResponse.json({ products: dedupeProducts(products) });
+}
+
+function dedupeProducts<T extends { id: string; productUrl?: string; retailer: string; title: string; price?: number }>(products: T[]) {
+  const seen = new Set<string>();
+  return products.filter((product) => {
+    const key = product.productUrl || `${product.id}:${product.retailer}:${product.title}:${product.price ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

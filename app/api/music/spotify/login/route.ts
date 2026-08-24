@@ -13,7 +13,6 @@ export async function GET() {
       scope: SPOTIFY_SCOPES.join(" "),
       redirect_uri: config.redirectUri,
       state,
-      show_dialog: "true",
     }).toString();
 
     const response = NextResponse.redirect(url);
@@ -24,7 +23,6 @@ export async function GET() {
       path: "/",
       maxAge: 10 * 60,
     });
-    response.cookies.delete(SPOTIFY_COOKIE_NAMES.token);
     return response;
   } catch {
     return NextResponse.redirect(new URL("/?spotify=missing-config", process.env.SPOTIFY_REDIRECT_URI ?? "http://127.0.0.1:3000"));

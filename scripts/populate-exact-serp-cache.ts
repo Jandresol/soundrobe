@@ -12,8 +12,24 @@ const apiKey = process.env.SERPAPI_API_KEY;
 if (!apiKey) throw new Error("SERPAPI_API_KEY is missing.");
 
 const searches = [
-  intent("top", "satin cowl top", ["black"], ["satin"], ["nightlife", "polished", "dramatic"], "womenswear black satin cowl neck top"),
-  intent("top", "asymmetric fitted top", ["plum", "burgundy"], ["rib knit"], ["sensual", "offbeat", "polished"], "womenswear plum asymmetric fitted top"),
+  intent("top", "flannel shirt", ["burgundy"], ["flannel", "cotton"], ["grunge", "alt-rock", "worn-in"], "womenswear burgundy distressed flannel shirt"),
+  intent("top", "distressed fitted graphic tee", ["washed black", "black"], ["cotton"], ["grunge", "post-grunge", "punk"], "womenswear washed black distressed graphic tee"),
+  intent("bottom", "baggy jeans", ["faded denim", "denim"], ["denim"], ["grunge", "90s hip-hop", "worn-in"], "womenswear faded denim baggy jeans"),
+  intent("shoes", "combat boots", ["black"], ["leather"], ["punk", "grunge", "hardcore"], "womenswear black leather combat boots"),
+  intent("outerwear", "oversized knit", ["cream"], ["fuzzy knit"], ["shoegaze", "indie", "bedroom pop"], "womenswear cream fuzzy oversized cardigan"),
+  intent("accessory", "studded belt", ["black"], ["leather"], ["punk", "emo", "post-grunge"], "womenswear black studded leather belt"),
+  intent("outerwear", "cropped bomber jacket", ["black"], ["nylon"], ["hip-hop", "y2k", "street"], "womenswear black cropped bomber jacket"),
+  intent("outerwear", "varsity jacket", ["dark denim", "denim"], ["denim"], ["regional hip-hop", "street", "heritage"], "womenswear dark denim varsity jacket"),
+  intent("shoes", "chunky sneakers", ["black"], ["leather"], ["hip-hop", "street", "bold"], "womenswear black chunky sneakers"),
+  intent("outerwear", "track jacket", ["black"], ["nylon"], ["trap", "drill", "electronic"], "womenswear black nylon track jacket"),
+  intent("shoes", "platform boots", ["silver"], ["metallic"], ["hyperpop", "rave", "electronic"], "womenswear silver platform boots"),
+  intent("outerwear", "windbreaker", ["black"], ["nylon"], ["uk garage", "dnb", "club"], "womenswear black nylon windbreaker"),
+  intent("top", "crochet top", ["cream"], ["crochet"], ["neo-soul", "folk", "boho"], "womenswear cream crochet fitted top"),
+  intent("outerwear", "suede jacket", ["rust"], ["suede"], ["soul", "folk", "70s rock"], "womenswear rust suede jacket"),
+  intent("bottom", "bootcut jeans", ["denim"], ["denim"], ["70s rock", "psychedelic", "western"], "womenswear denim bootcut jeans"),
+  intent("shoes", "oxfords", ["black"], ["leather"], ["experimental", "art-pop", "jazz"], "womenswear black leather oxfords"),
+  intent("top", "button-up shirt", ["cream"], ["satin"], ["jazz", "sophisti-pop", "soul"], "womenswear cream satin button-up shirt"),
+  intent("bag", "top-handle bag", ["black"], ["leather"], ["jazz", "classic", "vintage soul"], "womenswear black top handle bag vintage"),
 ];
 
 async function main() {

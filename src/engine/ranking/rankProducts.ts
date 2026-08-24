@@ -44,7 +44,7 @@ function scoreAsSetAddition(recommendation: ProductRecommendation, selected: Pro
   const selectedSources = new Set(selected.flatMap((entry) => entry.intent.musicSources.map((source) => source.id.toLowerCase())));
   const selectedEras = new Set(selected.flatMap((entry) => entry.intent.eras.map((era) => era.toLowerCase())));
 
-  const categoryBonus = selectedCategories.has(category) ? -6 : 10;
+  const categoryBonus = category === "dress" ? (selectedCategories.has(category) ? -6 : 2) : selectedCategories.has(category) ? -6 : 10;
   const influenceBonus = sources.some((source) => !selectedSources.has(source)) ? 6 : 0;
   const eraBonus = eras.some((era) => !selectedEras.has(era)) ? 4 : eras.length ? 1 : 0;
   const garmentPenalty = selectedGarments.includes(recommendation.intent.garmentType.toLowerCase()) ? 12 : 0;

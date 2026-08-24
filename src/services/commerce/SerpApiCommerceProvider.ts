@@ -1,5 +1,6 @@
 import type { ProductCandidate } from "@/src/domain/commerce/types";
 import type { GarmentIntent, ShoppingPreferences } from "@/src/domain/style/types";
+import { scoreProduct } from "@/src/engine/ranking/scoreProduct";
 import type { CommerceDiagnostics, CommerceProvider } from "@/src/services/commerce/CommerceProvider";
 import { readProductSearchCache, writeProductSearchCache } from "@/src/services/commerce/productSearchCache";
 
@@ -121,8 +122,12 @@ function canonicalGarment(garmentType: string, category: string) {
   if (value.includes("low-rise") || value.includes("low rise")) return "low rise jeans";
   if (value.includes("wide-leg") || value.includes("wide leg") || value.includes("trouser")) return "wide leg trouser";
   if (value.includes("slip skirt")) return "slip skirt";
+  if (value.includes("jumpsuit")) return "jumpsuit";
+  if (value.includes("slinky midi")) return "slinky midi dress";
+  if (value.includes("draped jersey")) return "draped jersey dress";
   if (value.includes("slip dress")) return "slip dress";
   if (value.includes("mini dress")) return "mini dress";
+  if (value.includes("loafer")) return "loafers";
   if (value.includes("boot")) return "boots";
   if (value.includes("ballet")) return "ballet flats";
   if (value.includes("sneaker")) return "retro sneakers";
@@ -239,6 +244,7 @@ function tokenOverlap(text: string, value: string) {
 function filterProducts(products: ProductCandidate[], intent: GarmentIntent, preferences: ShoppingPreferences) {
   return products
     .filter((product) => product.attributes.category === intent.category)
+    .filter((product) => scoreProduct(product, intent, preferences).score > 0)
     .filter((product) => preferences.minPrice === undefined || product.price >= preferences.minPrice)
     .filter((product) => preferences.maxPrice === undefined || product.price <= preferences.maxPrice)
     .filter((product) => !preferences.excludedRetailers?.includes(product.retailer))

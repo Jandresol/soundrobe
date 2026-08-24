@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
         { error: error instanceof Error ? error.message : "Spotify music profile failed." },
         { status: 502 },
       );
-      response.cookies.delete(SPOTIFY_COOKIE_NAMES.token);
+      if (shouldClearSpotifyToken(error)) response.cookies.delete(SPOTIFY_COOKIE_NAMES.token);
       return response;
     }
   }
@@ -96,6 +96,11 @@ function parseTimeWeights(params: URLSearchParams): MusicTimeWeights | undefined
 function numberParam(params: URLSearchParams, name: string) {
   const value = Number(params.get(name));
   return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function shouldClearSpotifyToken(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return /\bSpotify (?:request failed|token refresh failed): (?:400|401)\b/.test(error.message);
 }
 
 function commerceProviderForRequest(preferences = { maxPrice: 250 }): CommerceProvider {

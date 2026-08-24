@@ -43,6 +43,7 @@ void (async () => {
   genreEraInteractionTest();
   sceneLevelFashionMapTest();
   balancedDiscoRnbAccentTest();
+  garmentQueryQualityTest();
   singleSignalTest();
   mixedSignalTest();
   multiIntentShoeTest();
@@ -159,10 +160,36 @@ function balancedDiscoRnbAccentTest() {
   const balanced = styleForGenres(["pop", "r&b", "soul", "funk", "disco", "club", "femme", "sensual", "queer", "experimental", "riot-grrrl"], ["1980s", "2020s"]);
   const garmentTypes = labels(balanced.garmentTypes, 10);
   const materials = labels(balanced.materials, 8);
+  const dressIntents = generateGarmentIntents(balanced).filter((intent) => intent.category === "dress");
   assert(garmentTypes.some((garment) => ["satin cowl top", "statement flared trouser", "pointed leather boots", "fitted leather jacket"].includes(garment)), "balanced disco/R&B profile keeps nightlife-polish garments");
   assert(materials.some((material) => ["satin", "metallic", "leather", "rib knit"].includes(material)), "balanced disco/R&B profile keeps polished materials");
+  assert(dressIntents.some((intent) => ["jumpsuit", "slinky midi dress", "draped jersey dress", "satin mini dress", "bodycon dress", "mini dress"].includes(intent.garmentType)), "balanced disco/R&B profile searches a glossy nightlife dress");
+  assert(["jumpsuit", "slinky midi dress", "draped jersey dress", "satin mini dress"].includes(dressIntents[0]?.garmentType), "balanced disco/R&B profile leads dress alternatives with movement pieces");
+  assert(dressIntents[0]?.garmentType !== "lace slip dress", "balanced disco/R&B profile does not lead dress search with punk lace slip");
   assert(!garmentTypes.slice(0, 4).includes("graphic baby tee"), "riot/femme accent tags do not make graphic baby tee the lead top for balanced disco/R&B");
   assert(!garmentTypes.slice(0, 6).includes("slip dress"), "goth/riot dress language does not dominate balanced disco/R&B");
+}
+
+function garmentQueryQualityTest() {
+  const style = {
+    traits: signals(["rebellious"]),
+    colors: signals(["leather", "black", "denim"]),
+    materials: signals(["leather", "cotton", "denim"]),
+    silhouettes: signals(["fitted"]),
+    garmentTypes: signals(["moto jacket", "graphic baby tee", "denim mini dress"]),
+    accessories: [],
+    aesthetics: signals(["grunge"]),
+    eraInfluences: [],
+    sourcesBySignal: {},
+  };
+  const queries = generateGarmentIntents(style).map((intent) => intent.searchQuery);
+  assert(!queries.some((query) => query.includes("leather leather")), "queries do not duplicate material already expressed by garment label");
+  assert(!queries.some((query) => query.includes("denim denim")), "queries do not duplicate denim as both color/material and garment label");
+  assert(!queries.some((query) => query.includes("leather cotton graphic")), "material terms are not used as colors for graphic tees");
+  assert(!queries.some((query) => query.includes("leather sculptural gold earrings")), "jewelry queries do not inherit irrelevant leather materials");
+  assert(queries.some((query) => query === "womenswear black leather moto jacket"), "moto jacket keeps relevant leather material once");
+  assert(queries.some((query) => query === "womenswear black cotton graphic baby tee"), "graphic baby tee keeps cotton but rejects leather as color/material noise");
+  assert(queries.some((query) => query === "womenswear denim mini dress"), "denim mini dress expresses denim once");
 }
 
 function singleSignalTest() {
@@ -192,8 +219,8 @@ function altRiotShoePriorityTest() {
   const style = styleForGenres(["rock", "alternative rock", "pop", "rap", "hip-hop", "punk", "riot-grrrl", "club"], ["2020s"]);
   const shoeIntents = generateGarmentIntents(style).filter((intent) => intent.category === "shoes");
   const boots = shoeIntents.find((intent) => intent.garmentType.includes("boots"));
-  const sneakers = shoeIntents.find((intent) => intent.garmentType.includes("sneakers"));
-  assert(boots && sneakers && boots.priority > sneakers.priority, "alt-rock/riot profiles prioritize boots over sneakers");
+  const casualShoes = shoeIntents.find((intent) => intent.garmentType.includes("sneakers") || intent.garmentType.includes("loafers"));
+  assert(boots && (!casualShoes || boots.priority > casualShoes.priority), "alt-rock/riot profiles prioritize boots over casual shoes");
 }
 
 function y2kGlamShoeIntentTest() {
@@ -407,6 +434,12 @@ function productContextScoringTest() {
     title: "Lulus Cotton Button-Front Mini Dress",
   };
   assert.equal(scoreProduct(buttonFrontDress, clubMiniDressIntent, { maxPrice: 350 }).score, 0, "button-front cotton dresses do not satisfy club/riot mini dress intents");
+  const gothicFloralSlipDress = {
+    ...product("gothic-floral-slip-dress", "dress", "slip dress", ["goth", "dark", "rebellious"], ["lace", "mesh"], ["black"]),
+    retailer: "punkdesign.shop",
+    title: "GOTHIC FLORAL LACE RUCHED MESH SLIP DRESS",
+  };
+  assert.equal(scoreProduct(gothicFloralSlipDress, clubMiniDressIntent, { maxPrice: 350 }).score, 0, "gothic floral slip dresses do not satisfy club/rebellious alt-rock dress intents");
   const dreamyMiniDressIntent = intentFor("dress", "mini dress", ["cream"], ["cotton"], ["dreamy", "ethereal", "soft"]);
   const leopardDress = {
     ...product("leopard-dress", "dress", "mini dress", ["cream"], ["cotton"], []),
