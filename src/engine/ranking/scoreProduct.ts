@@ -90,6 +90,30 @@ const romanticIntentTokens = [
   "spring",
 ];
 
+const retroDiscoProductTokens = [
+  "1970s",
+  "70s",
+  "disco",
+  "retro",
+  "vintage",
+];
+
+const retroDiscoIntentTokens = [
+  "1970s",
+  "70s",
+  "1980s",
+  "80s",
+  "boogie",
+  "classic pop",
+  "disco",
+  "funk",
+  "motown",
+  "nightlife",
+  "post-disco",
+  "retro",
+  "vintage",
+];
+
 const sensualProductTokens = [
   "bodycon",
   "corset",
@@ -560,6 +584,9 @@ function missesContextualStyleWorld(text: string, desiredText: string) {
     return true;
   }
   if (includesAny(text, romanticProductTokens) && !includesAny(desiredText, romanticIntentTokens)) {
+    return true;
+  }
+  if (includesAny(text, retroDiscoProductTokens) && !includesAny(desiredText, retroDiscoIntentTokens)) {
     return true;
   }
   if (

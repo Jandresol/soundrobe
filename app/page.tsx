@@ -125,7 +125,7 @@ function signatureStrength(garment: Garment) {
   if (category === "shoe" && /loafer|boot|mule|slingback|kitten|pointed|sleek/.test(text)) adjustment += 8;
   if (category === "accessory" && /shoulder bag|compact|mini bag|gold hoops|hoops|jewelry|sunglasses/.test(text)) adjustment += 5;
 
-  if (/\bskort\b|micro skirt|costume|halloween|etsy|vintage .*jumpsuit|super cropped|chunky mesh|lace-up sneaker|platform sneaker/.test(text)) adjustment -= 16;
+  if (/\bskort\b|micro skirt|costume|halloween|etsy|vintage .*jumpsuit|1970s .*jumpsuit|70s .*jumpsuit|disco .*jumpsuit|super cropped|chunky mesh|lace-up sneaker|platform sneaker/.test(text)) adjustment -= 28;
   if (category === "dress" && score < 82) adjustment -= 18;
   if (category === "accessory" && score < 72) adjustment -= 6;
 

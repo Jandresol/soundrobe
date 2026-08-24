@@ -492,6 +492,23 @@ function productContextScoringTest() {
   };
   assert.equal(scoreProduct(leopardDress, dreamyMiniDressIntent, { maxPrice: 350 }).score, 0, "animal-print dresses do not satisfy unrelated dream-pop dress intents");
 
+  const hipHopRnbDressIntent = intentFor("dress", "jumpsuit", ["black"], ["satin"], ["sleek", "sensual", "confident"]);
+  hipHopRnbDressIntent.musicSources = [
+    { kind: "genre", id: "hip-hop", label: "hip-hop", weight: 100 },
+    { kind: "genre", id: "r&b", label: "r&b", weight: 92 },
+  ];
+  const discoJumpsuit = {
+    ...product("disco-jumpsuit", "dress", "jumpsuit", ["black"], ["satin"], ["sleek"]),
+    retailer: "Etsy - Seller",
+    title: "1970s Black Disco Jumpsuit: Plunging V Neck, Wide Leg",
+  };
+  assert.equal(scoreProduct(discoJumpsuit, hipHopRnbDressIntent, { maxPrice: 350 }).score, 0, "70s disco jumpsuits do not satisfy hip-hop/R&B dress intent without retro/disco support");
+
+  const discoDressIntent = intentFor("dress", "jumpsuit", ["black"], ["satin"], ["nightlife", "retro", "polished"]);
+  discoDressIntent.eras = ["1970s"];
+  discoDressIntent.musicSources = [{ kind: "genre", id: "disco", label: "disco", weight: 100 }];
+  assert(scoreProduct(discoJumpsuit, discoDressIntent, { maxPrice: 350 }).score > 0, "70s disco jumpsuits can surface for explicit disco/retro intent");
+
   const boxStoreDenim = {
     ...product("box-store-denim", "outerwear", "cropped denim jacket", ["denim"], ["denim"], []),
     retailer: "Walmart",
