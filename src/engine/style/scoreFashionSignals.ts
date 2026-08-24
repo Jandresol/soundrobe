@@ -95,8 +95,9 @@ export function scoreFashionSignals(genres: WeightedSignal[], eras: WeightedSign
     if (association.genres && !genre) continue;
 
     const weight = genre ? (genre.weight * 0.72 + era.weight * 0.48) : era.weight * 0.65;
+    const contextualWeight = weight * associationContextMultiplier(association, genre ?? era, genres);
     const label = genre ? `${era.label} ${genre.label}` : era.label;
-    apply(association, weight, { kind: "association", id: association.id, label, weight });
+    apply(association, contextualWeight, { kind: "association", id: association.id, label, weight: contextualWeight });
   }
 
   const normalize = (map: Map<string, WeightedSignal>) => {
@@ -108,6 +109,23 @@ export function scoreFashionSignals(genres: WeightedSignal[], eras: WeightedSign
 
 function associationContextMultiplier(association: FashionAssociation, genre: WeightedSignal, genres: WeightedSignal[]) {
   const id = genre.id.toLowerCase();
+  const broadPopDanceScore = genres.reduce((score, signal) => {
+    const signalId = signal.id.toLowerCase();
+    return score + (["pop", "dance pop", "disco", "funk", "r&b", "contemporary r&b", "house", "reggaeton", "latin pop"].some((token) => signalId.includes(token)) ? signal.weight : 0);
+  }, 0);
+  const broadPopDanceCount = genres.filter((signal) => {
+    const signalId = signal.id.toLowerCase();
+    return ["pop", "dance pop", "disco", "funk", "r&b", "contemporary r&b", "house", "reggaeton", "latin pop"].some((token) => signalId.includes(token));
+  }).length;
+  const hasExplicitAltEdge = genres.some((signal) => {
+    const signalId = signal.id.toLowerCase();
+    return ["punk", "riot", "grunge", "post-grunge", "modern rock", "hard rock", "metal", "hardcore"].some((token) => signalId.includes(token)) && signal.weight >= 42;
+  });
+  const hasRootsContext = genres.some((signal) => {
+    const signalId = signal.id.toLowerCase();
+    return ["folk", "blues", "country", "americana", "singer-songwriter"].some((token) => signalId.includes(token)) && signal.weight >= 42;
+  });
+  const hasBroadPopDanceContext = broadPopDanceCount >= 3 && broadPopDanceScore >= 220;
   const hasStrongAltRockContext = genres.some((signal) =>
     ["alternative rock", "rock", "punk", "hard rock", "riot-grrrl", "riot grrrl"].includes(signal.id) &&
     signal.weight >= 34
@@ -122,6 +140,22 @@ function associationContextMultiplier(association: FashionAssociation, genre: We
     !hasStrongAltRockContext
   ) {
     return hasStrongDiscoRnbContext ? 0.18 : 0.36;
+  }
+
+  if (
+    ["2000s-pop-rock", "2000s-post-grunge-alt", "scene-2000s-post-grunge"].includes(association.id) &&
+    hasBroadPopDanceContext &&
+    !hasExplicitAltEdge
+  ) {
+    return 0.22;
+  }
+
+  if (
+    association.id === "1970s-rock-folk" &&
+    hasBroadPopDanceContext &&
+    !hasRootsContext
+  ) {
+    return 0.38;
   }
 
   if (

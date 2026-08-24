@@ -70,7 +70,7 @@ export function OutfitCanvas({
         </div>
       </div>
 
-      <div className="grid auto-rows-[minmax(128px,auto)] gap-3 md:grid-cols-2">
+      <div className="grid auto-rows-fr gap-3 md:grid-cols-2">
         {visibleGarments.map((garment) => {
           const isActive = selectedCategory === garment.category;
           const meta = slotMeta[garment.category];
@@ -88,7 +88,7 @@ export function OutfitCanvas({
               isActive ? "border-[#e64aa0] bg-[#f7f1f6] outline outline-4 outline-[#ffd3e8]" : "border-[#202020] bg-[#f8f9fb]"
             } ${meta.className}`}
           >
-            <div className="flex h-[104px] w-[96px] shrink-0 items-center justify-center border-2 border-[#202020] bg-[#eef3fb] p-1">
+            <div className="flex min-h-[104px] w-[96px] shrink-0 self-stretch items-center justify-center border-2 border-[#202020] bg-[#eef3fb] p-1">
               <ProductThumbnail garment={garment} />
             </div>
             <div className="flex min-w-0 flex-1 flex-col">

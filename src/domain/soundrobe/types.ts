@@ -27,6 +27,7 @@ export type SoundrobeResult = {
         shortTerm: number;
       };
       commerce?: CommerceDiagnostics;
+      optionalCategories?: string[];
     };
   };
 };

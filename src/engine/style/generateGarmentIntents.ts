@@ -113,6 +113,15 @@ function profileFitMultiplier(signal: WeightedSignal, category: GarmentCategory 
   const sourceIds = (styleProfile.sourcesBySignal[signal.id] ?? []).map((source) => source.id.toLowerCase());
   const sourceLabels = (styleProfile.sourcesBySignal[signal.id] ?? []).map((source) => source.label.toLowerCase());
   const sourceText = [...sourceIds, ...sourceLabels].join(" ");
+  const altFemmeRiotScore = profileThemeScore(styleProfile, ["riot", "punk", "goth", "gothic", "grunge", "alternative rock", "hard rock", "feminist", "femme", "rebellious", "direct", "diy"]);
+  const glossyDiscoScore = profileThemeScore(styleProfile, ["disco", "funk", "soul", "r&b", "club", "dance pop", "1980s", "glossy", "nightlife", "polished", "sensual"]);
+  const hasAltFemmeRiotDominance = altFemmeRiotScore >= 120 && altFemmeRiotScore >= glossyDiscoScore * 0.62;
+  if (hasAltFemmeRiotDominance) {
+    if (["lace slip dress", "slip dress", "mesh dress", "asymmetrical mini dress", "lace dress", "distressed slip dress", "washed slip dress"].includes(label)) return 1.7;
+    if (["mini dress", "bodycon dress", "tube dress"].includes(label)) return 1.18;
+    if (label.includes("jumpsuit")) return 0.35;
+    if (["slinky midi dress", "draped jersey dress", "satin mini dress", "halter mini dress"].includes(label)) return 0.82;
+  }
   const hasGlossyRnbDisco = [...styleProfile.traits, ...styleProfile.aesthetics].some((entry) =>
     ["glossy", "confident", "sensual", "nightlife", "polished"].includes(entry.id) && entry.weight >= 55
   ) || Object.values(styleProfile.sourcesBySignal).some((sources) =>
@@ -120,8 +129,21 @@ function profileFitMultiplier(signal: WeightedSignal, category: GarmentCategory 
   );
   if (!hasGlossyRnbDisco) return 1;
   if (["jumpsuit", "satin jumpsuit", "slinky midi dress", "draped jersey dress", "satin mini dress", "halter mini dress"].includes(label)) return 1.45;
-  if ((label.includes("slip dress") || label.includes("lace")) && /(riot|goth|punk|grunge|dark)/.test(sourceText)) return 0.22;
+  if ((label.includes("slip dress") || label.includes("lace")) && /(riot|goth|punk|grunge|dark)/.test(sourceText)) return 1.08;
   return 1;
+}
+
+function profileThemeScore(styleProfile: StyleProfile, tokens: string[]) {
+  const tokenHits = (text: string) => tokens.some((token) => text.includes(token));
+  const directScore = [...styleProfile.traits, ...styleProfile.aesthetics].reduce((score, signal) => {
+    const text = `${signal.id} ${signal.label}`.toLowerCase();
+    return score + (tokenHits(text) ? signal.weight : 0);
+  }, 0);
+  const sourceScore = Object.values(styleProfile.sourcesBySignal).flat().reduce((score, source) => {
+    const text = `${source.id} ${source.label}`.toLowerCase();
+    return score + (tokenHits(text) ? source.weight * 0.35 : 0);
+  }, 0);
+  return directScore + sourceScore;
 }
 
 function buildFallbackCandidate(category: GarmentCategory, styleProfile: StyleProfile): IntentCandidate {
@@ -181,7 +203,7 @@ function selectIntentColor(signal: WeightedSignal, category: GarmentCategory, co
 function selectIntentMaterial(signal: WeightedSignal, category: GarmentCategory, materials: string[]) {
   const label = signal.label.toLowerCase();
   if (category === "jewelry") return "";
-  if (materials.some((material) => labelHasTerm(label, material))) return "";
+  if (labelHasMaterialTerm(label) || materials.some((material) => labelHasTerm(label, material))) return "";
   const direct = materials.find((material) => label.includes(material) || material.includes(label));
   if (direct) return direct;
   if (label.includes("jacket") || label.includes("boots") || label.includes("bag")) return materials.find((material) => ["leather", "suede", "nylon", "denim"].includes(material)) ?? "";
@@ -202,6 +224,10 @@ function labelHasTerm(label: string, term: string) {
   const normalizedLabel = normalizeSearchTerm(label);
   const normalizedTerm = normalizeSearchTerm(term);
   return normalizedLabel.split(" ").includes(normalizedTerm) || normalizedLabel.includes(normalizedTerm);
+}
+
+function labelHasMaterialTerm(label: string) {
+  return Array.from(materialLikeColorTerms).some((term) => labelHasTerm(label, term));
 }
 
 function uniqueSearchTerms(parts: string[]) {

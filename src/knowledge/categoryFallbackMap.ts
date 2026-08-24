@@ -45,7 +45,7 @@ export const categoryFallbackAssociations: CategoryFallbackAssociation[] = [
       outerwear: ["worn leather moto jacket", "distressed leather jacket", "cropped leather jacket"],
       top: ["distressed fitted graphic tee", "goth baby tee", "mesh long sleeve"],
       bottom: ["leather trousers", "leather mini skirt", "plaid mini skirt"],
-      dress: ["asymmetrical mini dress", "lace slip dress"],
+      dress: ["lace slip dress", "mesh dress", "asymmetrical mini dress", "slip dress"],
       shoes: ["engineer boots", "moto boots", "pointed leather boots"],
       bag: ["hardware shoulder bag", "slouchy leather bag"],
       jewelry: ["silver jewelry", "choker"],

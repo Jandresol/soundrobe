@@ -49,11 +49,11 @@ export function GarmentCard({
       onKeyDown={(event) => {
         if (event.key === "Enter") onSelect(garment);
       }}
-      className={`catalog-tile w-full border-2 bg-[#f8f9fb] p-1 text-left transition-all ${
+      className={`catalog-tile flex h-full w-full flex-col border-2 bg-[#f8f9fb] p-1 text-left transition-all ${
         isSelected ? "border-[#e64aa0] shadow-[0_0_0_3px_#ffd3e8,inset_0_0_0_2px_#e64aa0]" : "border-[#202020]"
       }`}
     >
-      <div className="mb-2 flex aspect-[4/5] min-h-44 items-center justify-center border-2 border-[#202020] bg-[#eef3fb] p-1">
+      <div className="mb-2 flex aspect-[4/5] min-h-44 w-full shrink-0 items-center justify-center border-2 border-[#202020] bg-[#eef3fb] p-1">
         {garment.image ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={garment.image} alt="" className="h-full w-full object-contain [image-rendering:pixelated]" />
@@ -68,7 +68,7 @@ export function GarmentCard({
           </div>
         )}
       </div>
-      <div className="space-y-1 px-1 pb-1 text-[10px] uppercase text-[#111111]">
+      <div className="flex flex-1 flex-col gap-1 px-1 pb-1 text-[10px] uppercase text-[#111111]">
         <div className="text-fit min-h-8 font-bold leading-4">{garment.name.toUpperCase()}</div>
         <div className="truncate text-[9px] text-[#4b4b4b]">{sellerLabel}</div>
         <div className="flex flex-wrap gap-1 text-[9px]">
@@ -155,7 +155,7 @@ export function GarmentCard({
             target="_blank"
             rel="noreferrer"
             onClick={(event) => event.stopPropagation()}
-            className="bevel-button block min-h-[24px] border border-[#202020] bg-[#ffd3e8] px-1 py-[3px] text-center font-bold"
+            className="bevel-button mt-auto block min-h-[24px] border border-[#202020] bg-[#ffd3e8] px-1 py-[3px] text-center font-bold"
           >
             SHOP
           </a>

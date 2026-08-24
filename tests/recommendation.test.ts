@@ -8,7 +8,9 @@ import { scoreProduct } from "@/src/engine/ranking/scoreProduct";
 import { buildStyleProfile } from "@/src/engine/style/buildStyleProfile";
 import { generateGarmentIntents } from "@/src/engine/style/generateGarmentIntents";
 import { generatePalette } from "@/src/engine/style/generatePalette";
+import { generateSoundrobeFromMusicProfile } from "@/src/services/soundrobe/generateSoundrobe";
 import { DemoCommerceProvider } from "@/src/services/commerce/DemoCommerceProvider";
+import { productColorNameFromRgb } from "@/src/services/commerce/extractProductColor";
 import { TestCatalogCommerceProvider } from "@/src/services/commerce/TestCatalogCommerceProvider";
 import { DemoMusicProvider } from "@/src/services/music/DemoMusicProvider";
 import { combineTimeRanges } from "@/src/engine/music/combineTimeRanges";
@@ -43,7 +45,11 @@ void (async () => {
   genreEraInteractionTest();
   sceneLevelFashionMapTest();
   balancedDiscoRnbAccentTest();
+  altFemmeRiotDressPriorityTest();
+  messyMainstreamCentroidTest();
+  await optionalDressDefaultTest();
   garmentQueryQualityTest();
+  productImageColorMappingTest();
   singleSignalTest();
   mixedSignalTest();
   multiIntentShoeTest();
@@ -170,6 +176,37 @@ function balancedDiscoRnbAccentTest() {
   assert(!garmentTypes.slice(0, 6).includes("slip dress"), "goth/riot dress language does not dominate balanced disco/R&B");
 }
 
+function altFemmeRiotDressPriorityTest() {
+  const style = styleForGenres(["rock", "alternative rock", "pop", "rap", "hip-hop", "r&b", "soul", "funk", "disco", "femme", "riot-grrrl", "feminist", "gothic", "punk"], ["2020s"]);
+  const dressIntents = generateGarmentIntents(style).filter((intent) => intent.category === "dress");
+  const dressTypes = dressIntents.map((intent) => intent.garmentType);
+  const altDress = dressIntents.find((intent) => ["lace slip dress", "slip dress", "mesh dress", "asymmetrical mini dress"].includes(intent.garmentType));
+  const jumpsuit = dressIntents.find((intent) => intent.garmentType.includes("jumpsuit"));
+  assert(altDress, "alt/femme/riot profile searches a grunge lingerie or asymmetric dress");
+  assert(["lace slip dress", "slip dress", "mesh dress", "asymmetrical mini dress"].includes(dressTypes[0]), "alt/femme/riot profile leads dress alternatives with grunge lingerie language");
+  assert(!jumpsuit || altDress.priority > jumpsuit.priority, "funk/disco accent does not outrank riot-femme dress language with jumpsuit");
+}
+
+function messyMainstreamCentroidTest() {
+  const style = styleForGenres(["disco", "psychedelic", "r&b", "alternative rock", "house", "classic rock", "reggaeton", "pop", "dance pop", "indie"], ["1970s", "2000s", "2020s"]);
+  const intents = generateGarmentIntents(style);
+  const topIntent = intents.find((intent) => intent.category === "top");
+  const topTen = intents.slice(0, 10).map((intent) => intent.garmentType);
+  assert(topIntent && ["satin cowl top", "draped halter top", "rib knit tank", "corset top", "asymmetric one-shoulder top", "fitted baby tee"].includes(topIntent.garmentType), "messy mainstream centroid leads tops with a bridge piece, not a collapsed alt tee");
+  assert(!topTen.slice(0, 4).includes("distressed fitted graphic tee"), "messy mainstream profile does not let 2000s alt-rock dominate the top cluster");
+  assert(topTen.some((garment) => ["low-rise jeans", "straight jeans", "wide-leg trouser"].includes(garment)), "messy mainstream centroid keeps wearable denim/trouser bottoms");
+  assert(topTen.some((garment) => ["black leather loafers", "kitten heels", "combat boots", "pointed leather boots"].includes(garment)), "messy mainstream centroid offers either sleek or grounded shoes");
+  assert(topTen.some((garment) => ["compact shoulder bag", "mini bag"].includes(garment)), "messy mainstream centroid keeps a compact bag bridge");
+  assert(topTen.includes("gold hoops"), "messy mainstream centroid keeps pop/R&B jewelry rather than only alt accessories");
+}
+
+async function optionalDressDefaultTest() {
+  const country = await generateSoundrobeFromMusicProfile(musicProfile(["country", "folk", "americana"], ["2020s"]), new TestCatalogCommerceProvider({ maxPrice: 250 }), { maxPrice: 250 }, "demo");
+  const gothicRomantic = await generateSoundrobeFromMusicProfile(musicProfile(["gothic", "romantic", "club"], ["2020s"]), new TestCatalogCommerceProvider({ maxPrice: 250 }), { maxPrice: 250 }, "demo");
+  assert(country.metadata.diagnostics?.optionalCategories?.includes("dress"), "profiles without a strong dress signal hide dress by default");
+  assert(!gothicRomantic.metadata.diagnostics?.optionalCategories?.includes("dress"), "profiles with strong dress language keep dress visible by default");
+}
+
 function garmentQueryQualityTest() {
   const style = {
     traits: signals(["rebellious"]),
@@ -190,6 +227,14 @@ function garmentQueryQualityTest() {
   assert(queries.some((query) => query === "womenswear black leather moto jacket"), "moto jacket keeps relevant leather material once");
   assert(queries.some((query) => query === "womenswear black cotton graphic baby tee"), "graphic baby tee keeps cotton but rejects leather as color/material noise");
   assert(queries.some((query) => query === "womenswear denim mini dress"), "denim mini dress expresses denim once");
+}
+
+function productImageColorMappingTest() {
+  assert.equal(productColorNameFromRgb(65, 38, 32), "chocolate", "dark warm brown maps to chocolate");
+  assert.equal(productColorNameFromRgb(118, 25, 48), "burgundy", "deep red maps to burgundy");
+  assert.equal(productColorNameFromRgb(223, 214, 190), "cream", "warm light neutral maps to cream");
+  assert.equal(productColorNameFromRgb(39, 69, 106), "denim", "blue product pixels map to denim");
+  assert.equal(productColorNameFromRgb(20, 20, 22), "black", "near-black product pixels map to black");
 }
 
 function singleSignalTest() {

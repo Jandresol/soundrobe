@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { ProductCandidate } from "@/src/domain/commerce/types";
 import type { GarmentCategory, GarmentIntent } from "@/src/domain/style/types";
+import { extractProductColorsFromImage } from "@/src/services/commerce/extractProductColor";
 import { writeProductSearchCache } from "@/src/services/commerce/productSearchCache";
 
 const resultsPerSearch = 40;
@@ -12,28 +13,27 @@ const apiKey = process.env.SERPAPI_API_KEY;
 if (!apiKey) throw new Error("SERPAPI_API_KEY is missing.");
 
 const searches = [
-  intent("top", "flannel shirt", ["burgundy"], ["flannel", "cotton"], ["grunge", "alt-rock", "worn-in"], "womenswear burgundy distressed flannel shirt"),
-  intent("top", "distressed fitted graphic tee", ["washed black", "black"], ["cotton"], ["grunge", "post-grunge", "punk"], "womenswear washed black distressed graphic tee"),
-  intent("bottom", "baggy jeans", ["faded denim", "denim"], ["denim"], ["grunge", "90s hip-hop", "worn-in"], "womenswear faded denim baggy jeans"),
-  intent("shoes", "combat boots", ["black"], ["leather"], ["punk", "grunge", "hardcore"], "womenswear black leather combat boots"),
-  intent("outerwear", "oversized knit", ["cream"], ["fuzzy knit"], ["shoegaze", "indie", "bedroom pop"], "womenswear cream fuzzy oversized cardigan"),
-  intent("accessory", "studded belt", ["black"], ["leather"], ["punk", "emo", "post-grunge"], "womenswear black studded leather belt"),
-  intent("outerwear", "cropped bomber jacket", ["black"], ["nylon"], ["hip-hop", "y2k", "street"], "womenswear black cropped bomber jacket"),
-  intent("outerwear", "varsity jacket", ["dark denim", "denim"], ["denim"], ["regional hip-hop", "street", "heritage"], "womenswear dark denim varsity jacket"),
-  intent("shoes", "chunky sneakers", ["black"], ["leather"], ["hip-hop", "street", "bold"], "womenswear black chunky sneakers"),
-  intent("outerwear", "track jacket", ["black"], ["nylon"], ["trap", "drill", "electronic"], "womenswear black nylon track jacket"),
-  intent("shoes", "platform boots", ["silver"], ["metallic"], ["hyperpop", "rave", "electronic"], "womenswear silver platform boots"),
-  intent("outerwear", "windbreaker", ["black"], ["nylon"], ["uk garage", "dnb", "club"], "womenswear black nylon windbreaker"),
-  intent("top", "crochet top", ["cream"], ["crochet"], ["neo-soul", "folk", "boho"], "womenswear cream crochet fitted top"),
-  intent("outerwear", "suede jacket", ["rust"], ["suede"], ["soul", "folk", "70s rock"], "womenswear rust suede jacket"),
-  intent("bottom", "bootcut jeans", ["denim"], ["denim"], ["70s rock", "psychedelic", "western"], "womenswear denim bootcut jeans"),
-  intent("shoes", "oxfords", ["black"], ["leather"], ["experimental", "art-pop", "jazz"], "womenswear black leather oxfords"),
-  intent("top", "button-up shirt", ["cream"], ["satin"], ["jazz", "sophisti-pop", "soul"], "womenswear cream satin button-up shirt"),
-  intent("bag", "top-handle bag", ["black"], ["leather"], ["jazz", "classic", "vintage soul"], "womenswear black top handle bag vintage"),
+  intent("shoes", "cowboy boots", [], ["leather"], ["western", "heritage"], "womenswear cowboy boots"),
+  intent("outerwear", "trench coat", [], [], ["classic", "minimal", "city"], "womenswear trench coat"),
+  intent("top", "white fitted tee", ["white"], ["cotton"], ["minimal", "clean", "casual"], "womenswear white fitted tee"),
+  intent("outerwear", "relaxed cardigan", [], ["knit"], ["indie", "cozy", "casual"], "womenswear relaxed cardigan"),
+  intent("bottom", "denim mini skirt", [], ["denim"], ["soft girl", "indie", "playful"], "womenswear denim mini skirt"),
+  intent("bottom", "pencil skirt", [], [], ["classic", "office", "minimal"], "womenswear pencil skirt"),
+  intent("bottom", "capri pants", [], [], ["new wave", "vaporwave", "retro"], "womenswear capri pants"),
+  intent("top", "wrap top", [], [], ["world", "afro-alt", "romantic"], "womenswear wrap top"),
+  intent("top", "silk camisole", [], ["silk"], ["r&b", "romantic", "sensual"], "womenswear silk camisole"),
+  intent("shoes", "platform sandals", [], [], ["hyperpop", "global", "y2k"], "womenswear platform sandals"),
+  intent("shoes", "mules", [], [], ["vintage", "folk", "classic"], "womenswear mules"),
+  intent("bag", "hobo shoulder bag", [], [], ["indie", "soft", "casual"], "womenswear hobo shoulder bag"),
+  intent("accessory", "leather belt", [], ["leather"], ["western", "vintage", "classic"], "womenswear leather belt"),
+  intent("jewelry", "pearl jewelry", [], [], ["classic", "romantic", "ballet"], "womenswear pearl jewelry"),
 ];
 
 async function main() {
-  for (const [index, search] of searches.entries()) {
+  const onlyQuery = process.env.ONLY_QUERY?.toLowerCase().trim();
+  const selectedSearches = onlyQuery ? searches.filter((search) => search.searchQuery.toLowerCase() === onlyQuery) : searches;
+  if (!selectedSearches.length) throw new Error(`No exact search configured for ONLY_QUERY=${process.env.ONLY_QUERY}`);
+  for (const [index, search] of selectedSearches.entries()) {
     const products = await fetchProducts(search);
     await writeProductSearchCache(search.searchQuery, "serpapi", products, cacheTtlDays, {
       canonicalKey: search.searchQuery,
@@ -66,12 +66,12 @@ async function fetchProducts(intent: GarmentIntent) {
     link?: string;
     availability?: string;
   }> };
-  return (payload.shopping_results ?? [])
-    .map((result, index) => productFromResult(result, intent, index))
+  return (await Promise.all((payload.shopping_results ?? [])
+    .map((result, index) => productFromResult(result, intent, index))))
     .filter((product): product is ProductCandidate => Boolean(product));
 }
 
-function productFromResult(result: {
+async function productFromResult(result: {
   product_id?: string;
   title?: string;
   source?: string;
@@ -81,13 +81,15 @@ function productFromResult(result: {
   product_link?: string;
   link?: string;
   availability?: string;
-}, intent: GarmentIntent, index: number): ProductCandidate | null {
+}, intent: GarmentIntent, index: number): Promise<ProductCandidate | null> {
   const title = clean(result.title);
   const imageUrl = safeUrl(result.thumbnail);
   const productUrl = safeUrl(result.product_link ?? result.link);
   if (!title || !imageUrl || !productUrl) return null;
   const price = typeof result.extracted_price === "number" ? result.extracted_price : parsePrice(result.price);
   if (!Number.isFinite(price) || price <= 0) return null;
+  const titleColors = inferMatches(title, intent.colors);
+  const imageColors = await extractProductColorsFromImage(imageUrl);
   return {
     id: result.product_id ?? `serpapi-exact-${slug(intent.searchQuery)}-${index}`,
     retailer: clean(result.source) ?? "Google Shopping",
@@ -100,7 +102,7 @@ function productFromResult(result: {
     attributes: {
       category: intent.category,
       garmentType: intent.garmentType,
-      colors: inferMatches(title, intent.colors),
+      colors: unique([...titleColors, ...imageColors]),
       materials: inferMatches(title, intent.materials),
       silhouettes: intent.silhouettes,
       aesthetics: inferMatches(title, intent.aesthetics),
@@ -129,6 +131,10 @@ function intent(category: GarmentCategory, garmentType: string, colors: string[]
 function inferMatches(title: string, values: string[]) {
   const normalized = title.toLowerCase();
   return values.filter((value) => normalized.includes(value.toLowerCase()));
+}
+
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function clean(value?: string) {

@@ -43,6 +43,7 @@ export async function generateSoundrobeFromMusicProfile(
   const albumPalette = await extractAlbumPalette(weightedMusicProfile, timeWeights);
   const palette = generatePalette(styleProfile, albumPalette);
   const garmentIntents = generateGarmentIntents(styleProfile, palette);
+  const optionalCategories = optionalDefaultCategories(garmentIntents);
   const searchedGarmentIntents = selectSearchableIntents(garmentIntents);
   const candidatesByIntent = await searchCommerceOncePerKey(searchedGarmentIntents, commerceProvider);
   const rankedProducts = rankProducts(candidatesByIntent, preferences);
@@ -69,9 +70,19 @@ export async function generateSoundrobeFromMusicProfile(
           .filter((artist) => artist.genres.length > 0).length,
         timeWeights,
         commerce: commerceProvider.diagnostics?.(),
+        optionalCategories,
       },
     },
   };
+}
+
+function optionalDefaultCategories(garmentIntents: ReturnType<typeof generateGarmentIntents>) {
+  const strongDressIntent = garmentIntents.some((intent) =>
+    intent.category === "dress" &&
+    intent.priority >= 78 &&
+    /dress|jumpsuit|catsuit/i.test(intent.garmentType)
+  );
+  return strongDressIntent ? [] : ["dress"];
 }
 
 async function searchCommerceOncePerKey(garmentIntents: ReturnType<typeof generateGarmentIntents>, commerceProvider: CommerceProvider) {

@@ -2,6 +2,7 @@ import type { ProductCandidate } from "@/src/domain/commerce/types";
 import type { GarmentIntent, ShoppingPreferences } from "@/src/domain/style/types";
 import { scoreProduct } from "@/src/engine/ranking/scoreProduct";
 import type { CommerceDiagnostics, CommerceProvider } from "@/src/services/commerce/CommerceProvider";
+import { extractProductColorsFromImage } from "@/src/services/commerce/extractProductColor";
 import { readProductSearchCache, writeProductSearchCache } from "@/src/services/commerce/productSearchCache";
 
 type SerpApiShoppingResult = {
@@ -70,8 +71,8 @@ export class SerpApiCommerceProvider implements CommerceProvider {
     const response = await fetch(serpApiUrl(liveQuery, this.apiKey, this.options.resultsPerSearch), { cache: "no-store" });
     if (!response.ok) throw new Error(`SerpAPI request failed: ${response.status}`);
     const payload = await response.json() as SerpApiResponse;
-    const products = (payload.shopping_results ?? [])
-      .map((result, index) => productFromSerpResult(result, intent, liveQuery, index))
+    const products = (await Promise.all((payload.shopping_results ?? [])
+      .map((result, index) => productFromSerpResult(result, intent, liveQuery, index))))
       .filter((product): product is ProductCandidate => Boolean(product));
 
     await writeProductSearchCache(liveQuery, "serpapi", products, this.options.cacheTtlDays, {
@@ -196,13 +197,16 @@ function materialFamily(material: string) {
   return value;
 }
 
-function productFromSerpResult(result: SerpApiShoppingResult, intent: GarmentIntent, query: string, index: number): ProductCandidate | null {
+async function productFromSerpResult(result: SerpApiShoppingResult, intent: GarmentIntent, query: string, index: number): Promise<ProductCandidate | null> {
   const title = cleanText(result.title);
   const imageUrl = safeUrl(result.thumbnail);
   const productUrl = safeUrl(result.product_link ?? result.link);
   if (!title || !imageUrl || !productUrl) return null;
   const price = typeof result.extracted_price === "number" ? result.extracted_price : parsePrice(result.price);
   if (!Number.isFinite(price) || price <= 0) return null;
+
+  const titleColors = inferMatches(title, intent.colors);
+  const imageColors = await extractProductColorsFromImage(imageUrl);
 
   return {
     id: result.product_id ?? `serpapi-${slug(query)}-${index}`,
@@ -216,7 +220,7 @@ function productFromSerpResult(result: SerpApiShoppingResult, intent: GarmentInt
     attributes: {
       category: intent.category,
       garmentType: inferGarmentType(title, intent.garmentType),
-      colors: inferMatches(title, intent.colors),
+      colors: unique([...titleColors, ...imageColors]),
       materials: inferMatches(title, intent.materials),
       silhouettes: inferMatches(title, intent.silhouettes),
       aesthetics: inferMatches(title, intent.aesthetics),

@@ -52,7 +52,7 @@ const analysisSteps = [
 ];
 
 const defaultTimeWeights = { longTerm: 50, mediumTerm: 30, shortTerm: 20 };
-const soundrobeCacheVersion = "v18";
+const soundrobeCacheVersion = "v20";
 const soundrobeCacheTtlMs = 24 * 60 * 60 * 1000;
 const staleSoundrobeCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
 const placeholderPalettes: Record<Category, string[]> = {
@@ -100,6 +100,38 @@ function sortByMatchScore(garments: Garment[]) {
   return [...garments].sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
 }
 
+function sortBySignatureStrength(garments: Garment[]) {
+  return [...garments].sort((a, b) => signatureStrength(b) - signatureStrength(a));
+}
+
+function signatureStrength(garment: Garment) {
+  const score = garment.matchScore ?? 0;
+  const name = garment.name.toLowerCase();
+  const type = garment.garmentType?.toLowerCase() ?? "";
+  const tags = [
+    ...(garment.colors ?? []),
+    ...(garment.materials ?? []),
+    ...(garment.aesthetics ?? []),
+    ...(garment.influences ?? []),
+    type,
+  ].join(" ").toLowerCase();
+  const text = `${name} ${type} ${tags}`;
+  const category = garmentCategory(garment);
+
+  let adjustment = 0;
+  if (category === "outerwear" && /leather|moto|biker|blazer|jacket/.test(text)) adjustment += 9;
+  if (category === "top" && /satin|silk|halter|cami|rib|fitted|draped|cowl/.test(text)) adjustment += 8;
+  if (category === "bottom" && /jeans|denim|straight|low[- ]rise|wide[- ]leg|trouser|pants/.test(text)) adjustment += 10;
+  if (category === "shoe" && /loafer|boot|mule|slingback|kitten|pointed|sleek/.test(text)) adjustment += 8;
+  if (category === "accessory" && /shoulder bag|compact|mini bag|gold hoops|hoops|jewelry|sunglasses/.test(text)) adjustment += 5;
+
+  if (/\bskort\b|micro skirt|costume|halloween|etsy|vintage .*jumpsuit|super cropped|chunky mesh|lace-up sneaker|platform sneaker/.test(text)) adjustment -= 16;
+  if (category === "dress" && score < 82) adjustment -= 18;
+  if (category === "accessory" && score < 72) adjustment -= 6;
+
+  return score + adjustment;
+}
+
 const minimumInitialLookMatchByCategory: Record<Category, number> = {
   outerwear: 45,
   top: 60,
@@ -110,12 +142,12 @@ const minimumInitialLookMatchByCategory: Record<Category, number> = {
 };
 
 function isStrongInitialLookCandidate(garment: Garment) {
-  return (garment.matchScore ?? 0) >= minimumInitialLookMatchByCategory[garment.category];
+  return (garment.matchScore ?? 0) >= minimumInitialLookMatchByCategory[garmentCategory(garment)];
 }
 
 function isStrongSignatureCandidate(garment: Garment) {
-  const floor = Math.max(40, minimumInitialLookMatchByCategory[garment.category] - 8);
-  return (garment.matchScore ?? 0) >= floor;
+  const floor = Math.max(40, minimumInitialLookMatchByCategory[garmentCategory(garment)] - 8);
+  return signatureStrength(garment) >= floor;
 }
 
 function filterGarmentsByTag(garments: Garment[], tagId: string | null) {
@@ -130,6 +162,14 @@ function normalizeProductCategory(category?: string): Category {
   return "accessory";
 }
 
+function garmentCategory(garment: Pick<Garment, "category">): Category {
+  return normalizeProductCategory(garment.category);
+}
+
+function garmentMatchesCategory(garment: Pick<Garment, "category"> | undefined, category: Category) {
+  return garment ? garmentCategory(garment) === category : false;
+}
+
 function intentMatchesProductCategory(intentCategory: string, productCategory?: string) {
   const normalizedProduct = normalizeProductCategory(productCategory);
   if (normalizedProduct === "shoe") return intentCategory === "shoes";
@@ -141,6 +181,12 @@ function intentMatchesUiCategory(intentCategory: string, category: Category) {
   if (category === "shoe") return intentCategory === "shoes";
   if (category === "accessory") return intentCategory === "bag" || intentCategory === "jewelry" || intentCategory === "accessory";
   return intentCategory === category;
+}
+
+function optionalSignatureCategories(result: SoundrobeResult): Category[] {
+  return (result.metadata.diagnostics?.optionalCategories ?? [])
+    .map((category) => category === "shoes" ? "shoe" : category)
+    .filter((category): category is Category => categoryTabs.some((tab) => tab.value === category));
 }
 
 function garmentTypesForCategory(result: SoundrobeResult | null, category: Category) {
@@ -177,6 +223,10 @@ function expandGarmentTypeForCatalog(garmentType: string) {
     "asymmetric fitted top": ["asymmetric fitted top", "asymmetric top", "corset-detail top", "mesh long sleeve"],
     "distressed fitted graphic tee": ["distressed fitted graphic tee", "graphic baby tee", "tattoo graphic baby tee", "band tee"],
     "jumpsuit": ["jumpsuit", "satin jumpsuit", "slinky midi dress", "draped jersey dress"],
+    "lace slip dress": ["lace slip dress", "slip dress", "mesh dress", "asymmetrical mini dress"],
+    "slip dress": ["slip dress", "lace slip dress", "mesh dress", "simple slip dress"],
+    "mesh dress": ["mesh dress", "lace slip dress", "asymmetrical mini dress", "mini dress"],
+    "asymmetrical mini dress": ["asymmetrical mini dress", "mini dress", "mesh dress", "bodycon dress"],
     "slinky midi dress": ["slinky midi dress", "draped jersey dress", "simple slip dress"],
     "draped jersey dress": ["draped jersey dress", "slinky midi dress", "simple slip dress"],
     "black leather loafers": ["black leather loafers", "loafers", "distinctive loafers"],
@@ -245,13 +295,19 @@ function hashString(value: string) {
   return Math.abs(hash >>> 0).toString(36);
 }
 
+function shortEraLabel(name: string) {
+  const match = name.match(/(?:19|20)(\d{2})s/);
+  return match ? `${match[1]}s` : name;
+}
+
 function buildLookGarmentsFromRankedCatalog(ranked: Garment[]) {
   const categoryOrder: Category[] = ["outerwear", "top", "bottom", "shoe", "accessory", "dress"];
+  const signatureRanked = sortBySignatureStrength(ranked);
   const selected: Garment[] = [];
 
   for (const category of categoryOrder) {
-    const garment = ranked.find((candidate) =>
-      candidate.category === category &&
+    const garment = signatureRanked.find((candidate) =>
+      garmentMatchesCategory(candidate, category) &&
       isStrongInitialLookCandidate(candidate) &&
       !selected.some((item) => item.id === candidate.id)
     );
@@ -561,6 +617,7 @@ export default function HomePage() {
   const [signatureSlotByCategory, setSignatureSlotByCategory] = useState<Partial<Record<Category, string>>>({});
   const [hiddenSignatureCategories, setHiddenSignatureCategories] = useState<Category[]>([]);
   const [isRebuildingMix, setIsRebuildingMix] = useState(false);
+  const [closetView, setClosetView] = useState<"pieces" | "looks">("pieces");
 
 const generatedGarments = useMemo(
   () => soundrobeResult ? adaptGarments(soundrobeResult) : [],
@@ -609,8 +666,7 @@ const garments = useMemo(() => {
   }, [rawSignatureGarments, dismissedGarmentIds]);
   const signatureGarments = useMemo(() => {
     const hidden = new Set(hiddenSignatureCategories);
-    const eligibleSignatureGarments = allSignatureGarments.filter(isStrongSignatureCandidate);
-    const topMatch = eligibleSignatureGarments.find((garment) => !hidden.has(garment.category));
+    const eligibleSignatureGarments = sortBySignatureStrength(allSignatureGarments.filter(isStrongSignatureCandidate));
     const categoryCoverage = signatureCategoryOrder
       .filter((category) => !hidden.has(category))
       .map((category) => {
@@ -620,18 +676,17 @@ const garments = useMemo(() => {
             ?? garments.find((entry) => entry.id === slotId);
           if (slotted && isStrongSignatureCandidate(slotted)) return slotted;
         }
-        return eligibleSignatureGarments.find((entry) => entry.category === category);
+        return eligibleSignatureGarments.find((entry) => garmentMatchesCategory(entry, category));
       })
       .filter((garment): garment is Garment => Boolean(garment));
     const byId = new Map<string, Garment>();
-    if (topMatch) byId.set(topMatch.id, topMatch);
     for (const garment of categoryCoverage) byId.set(garment.id, garment);
     return Array.from(byId.values());
   }, [allSignatureGarments, garments, hiddenSignatureCategories, signatureSlotByCategory]);
   const wardrobeByCategory = useMemo(() => {
     const grouped = new Map<Category, Garment[]>();
     for (const tab of categoryTabs) {
-      grouped.set(tab.value, sortByMatchScore(garments.filter((garment) => garment.category === tab.value)));
+      grouped.set(tab.value, sortByMatchScore(garments.filter((garment) => garmentMatchesCategory(garment, tab.value))));
     }
     return grouped;
   }, [garments]);
@@ -654,6 +709,19 @@ const garments = useMemo(() => {
     ...musicProfile.trackTags.filter((tag) => !musicProfile.genres.some((genre) => genre.name.toLowerCase() === tag.name.toLowerCase())),
     ...musicProfile.eras.slice(0, 2),
   ].slice(0, 5);
+  const eraGraph = useMemo(() => {
+    const fallbackEras = ["1970s", "1980s", "1990s", "2000s", "2010s", "2020s"].map((name, index) => ({
+      name,
+      value: Math.max(8, 18 - index * 2),
+    }));
+    const eras = musicProfile.eras.length ? musicProfile.eras : fallbackEras;
+    return eras.slice(0, 6).map((era, index) => ({
+      ...era,
+      label: shortEraLabel(era.name),
+      value: Math.max(8, Math.min(100, era.value || 8)),
+      delay: `${index * 90}ms`,
+    }));
+  }, [musicProfile.eras]);
   const nowPlaying = useMemo(() => {
     const track = musicProfile.tracks[nowPlayingIndex % Math.max(musicProfile.tracks.length, 1)];
     const genreLine = `${musicProfile.genres.slice(0, 4).map((genre) => genre.name).join(" // ")} //`;
@@ -680,10 +748,10 @@ const garments = useMemo(() => {
     const kept = resolved.filter(isStrongInitialLookCandidate);
     const byCategory = new Map<Category, Garment>();
     for (const garment of buildLookGarmentsFromRankedCatalog(garments)) {
-      byCategory.set(garment.category, garment);
+      byCategory.set(garmentCategory(garment), garment);
     }
     for (const garment of kept) {
-      byCategory.set(garment.category, garment);
+      byCategory.set(garmentCategory(garment), garment);
     }
     const garmentIds = (["outerwear", "top", "bottom", "shoe", "accessory", "dress"] as Category[])
       .map((category) => byCategory.get(category))
@@ -698,7 +766,7 @@ const garments = useMemo(() => {
     const byCategory = new Map<Category, Garment>();
     for (const id of displayedCurrentLook.garmentIds) {
       const garment = garments.find((item) => item.id === id);
-      if (garment) byCategory.set(garment.category, garment);
+      if (garment) byCategory.set(garmentCategory(garment), garment);
     }
     return slotOrder.map((category) => byCategory.get(category)).filter((garment): garment is Garment => Boolean(garment));
   }, [displayedCurrentLook, garments]);
@@ -740,7 +808,7 @@ const garments = useMemo(() => {
     setSelectedSlotCategory("outerwear");
     setDismissedGarmentIds([]);
     setSignatureSlotByCategory({});
-    setHiddenSignatureCategories([]);
+    setHiddenSignatureCategories(optionalSignatureCategories(result));
     setActiveProductTag(null);
     setCatalogProducts([]);
     setCatalogLoadedForUser(null);
@@ -1035,14 +1103,15 @@ const garments = useMemo(() => {
   };
 
   const toggleCurrentLookGarment = (garment: Garment) => {
-    setSelectedCategory(garment.category);
-    setSelectedSlotCategory(garment.category);
+    const category = garmentCategory(garment);
+    setSelectedCategory(category);
+    setSelectedSlotCategory(category);
     setCurrentLook((previous) => {
       const resolveGarment = (id: string) => garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
       if (previous.garmentIds.includes(garment.id)) {
         return { ...previous, garmentIds: previous.garmentIds.filter((id) => id !== garment.id), description: "" };
       }
-      const withoutSameCategory = previous.garmentIds.filter((id) => resolveGarment(id)?.category !== garment.category);
+      const withoutSameCategory = previous.garmentIds.filter((id) => !garmentMatchesCategory(resolveGarment(id), category));
       return { ...previous, garmentIds: [...withoutSameCategory, garment.id], description: "" };
     });
     setSelectedGarmentId(garment.id);
@@ -1091,7 +1160,7 @@ const garments = useMemo(() => {
 
       const existingSameCategory = previous.garmentIds.find((id) => {
         const garment = garments.find((item) => item.id === id);
-        return garment?.category === category;
+        return garmentMatchesCategory(garment, category);
       });
 
       if (existingSameCategory) {
@@ -1121,7 +1190,7 @@ const garments = useMemo(() => {
     if (!response.ok) return [] as Garment[];
     const payload = await response.json() as { products?: ProductCandidate[] };
     const nextProducts = payload.products ?? [];
-    const nextGarments = scoreCatalogProducts(nextProducts, soundrobeResult).filter((garment) => garment.category === category);
+    const nextGarments = scoreCatalogProducts(nextProducts, soundrobeResult).filter((garment) => garmentMatchesCategory(garment, category));
     setCatalogOffsets((previous) => ({ ...previous, [category]: offset + nextProducts.length }));
     setCatalogProducts((previous) => {
       const byId = new Map(previous.map((product) => [stableCatalogProductId(product), product]));
@@ -1135,13 +1204,13 @@ const garments = useMemo(() => {
     setSelectedCategory(category);
     setSelectedSlotCategory(category);
     const fetched = await fetchCatalogOptions(category);
-    const newest = fetched.find((garment) => garment.category === category);
+    const newest = fetched.find((garment) => garmentMatchesCategory(garment, category));
     if (newest) setSelectedGarmentId(newest.id);
   };
 
   const handleFindNextSignatureOption = (garment: Garment) => {
-    const category = garment.category;
-    const pool = sortByMatchScore(allSignatureGarments.filter((entry) => entry.category === category));
+    const category = garmentCategory(garment);
+    const pool = sortByMatchScore(allSignatureGarments.filter((entry) => garmentMatchesCategory(entry, category)));
     if (pool.length <= 1) return;
 
     const currentId = signatureSlotByCategory[category] ?? garment.id;
@@ -1156,9 +1225,9 @@ const garments = useMemo(() => {
     setSelectedGarmentId(next.id);
     setCurrentLook((previous) => {
       const resolveGarment = (id: string) => garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
-      const hasCategoryInLook = previous.garmentIds.some((id) => resolveGarment(id)?.category === category);
+      const hasCategoryInLook = previous.garmentIds.some((id) => garmentMatchesCategory(resolveGarment(id), category));
       if (!hasCategoryInLook) return previous;
-      const withoutCategory = previous.garmentIds.filter((id) => resolveGarment(id)?.category !== category);
+      const withoutCategory = previous.garmentIds.filter((id) => !garmentMatchesCategory(resolveGarment(id), category));
       return { ...previous, garmentIds: [...withoutCategory, next.id], description: "" };
     });
   };
@@ -1171,8 +1240,9 @@ const garments = useMemo(() => {
 
   const handleMoreLikeThis = (garment: Garment) => {
     const tag = recommendationTagForGarment(garment);
-    setSelectedCategory(garment.category);
-    setSelectedSlotCategory(garment.category);
+    const category = garmentCategory(garment);
+    setSelectedCategory(category);
+    setSelectedSlotCategory(category);
     if (tag) setActiveProductTag(tag);
     setDismissedGarmentIds((previous) => previous.filter((id) => id !== garment.id));
     setSelectedGarmentId(garment.id);
@@ -1180,7 +1250,7 @@ const garments = useMemo(() => {
       if (previous.garmentIds.includes(garment.id)) return previous;
       const withoutSameCategory = previous.garmentIds.filter((id) => {
         const existing = garments.find((item) => item.id === id);
-        return existing?.category !== garment.category;
+        return !garmentMatchesCategory(existing, category);
       });
       return { ...previous, garmentIds: [...withoutSameCategory, garment.id], description: "" };
     });
@@ -1188,12 +1258,12 @@ const garments = useMemo(() => {
 
   const handleDismissSignatureGarment = (garment: Garment, reason?: string) => {
     if (reason && reason !== "Skip") setFeedbackReasons((previous) => ({ ...previous, [garment.id]: reason }));
-    const category = garment.category;
+    const category = garmentCategory(garment);
     const nextDismissed = dismissedGarmentIds.includes(garment.id)
       ? dismissedGarmentIds
       : [...dismissedGarmentIds, garment.id];
     const nextPool = sortByMatchScore(
-      rawSignatureGarments.filter((entry) => entry.category === category && !nextDismissed.includes(entry.id)),
+      rawSignatureGarments.filter((entry) => garmentMatchesCategory(entry, category) && !nextDismissed.includes(entry.id)),
     );
 
     setDismissedGarmentIds(nextDismissed);
@@ -1202,7 +1272,7 @@ const garments = useMemo(() => {
       const resolveGarment = (id: string) => garments.find((item) => item.id === id) ?? rawSignatureGarments.find((item) => item.id === id);
       return {
         ...previous,
-        garmentIds: previous.garmentIds.filter((id) => resolveGarment(id)?.category !== category),
+        garmentIds: previous.garmentIds.filter((id) => !garmentMatchesCategory(resolveGarment(id), category)),
         description: "",
       };
     });
@@ -1240,7 +1310,8 @@ const garments = useMemo(() => {
         if (replacements >= 2) break;
         const current = garments.find((garment) => garment.id === id);
         if (!current) continue;
-        const categoryPool = garments.filter((garment) => garment.category === current.category && !existing.has(garment.id));
+        const category = garmentCategory(current);
+        const categoryPool = garments.filter((garment) => garmentMatchesCategory(garment, category) && !existing.has(garment.id));
         if (!categoryPool.length) continue;
         const replacement = categoryPool[(index + replacements) % categoryPool.length];
         existing.delete(id);
@@ -1512,7 +1583,7 @@ const garments = useMemo(() => {
                   </span>
                   <div className="relative h-5 border-2 border-[#303030] bg-[#f4f4f4]">
                     <div
-                      className={`h-full border-r-2 border-[#303030] ${index <= analysisIndex ? "bg-[#1746b8]" : "bg-[#d8d8d8]"}`}
+                      className={`analysis-progress-fill h-full border-r-2 border-[#303030] ${index <= analysisIndex ? "bg-[#1746b8]" : "bg-[#d8d8d8]"}`}
                       style={{ width: index < analysisIndex ? "100%" : index === analysisIndex ? `${analysisProgress}%` : "18%" }}
                     />
                   </div>
@@ -1528,16 +1599,16 @@ const garments = useMemo(() => {
 
               <div className="rounded-none border-2 border-[#303030] bg-[#ededed] p-3">
                 <div className="mb-3 text-[11px] font-bold uppercase">ERA TIMELINE</div>
-                <div className="grid grid-cols-6 gap-2 text-[10px] uppercase">
-                  {['70s', '80s', '90s', '00s', '10s', '20s'].map((label) => (
-                    <div key={label} className="text-center">
-                      <div className="mb-2 text-[#4d4d4d]">{label}</div>
-                      <div className="flex h-10 items-end justify-center gap-1">
-                        {[40, 22, 64, 92, 58, 30].map((height, index) => (
+                <div className="grid grid-cols-3 gap-2 text-[10px] uppercase sm:grid-cols-6">
+                  {eraGraph.map((era) => (
+                    <div key={era.name} className="text-center">
+                      <div className="mb-2 text-[#4d4d4d]">{era.label}</div>
+                      <div className="flex h-12 items-end justify-center gap-1 border-2 border-[#202020] bg-white p-1">
+                        {[0.42, 0.72, 1].map((scale, index) => (
                           <span
-                            key={`${label}-${index}`}
-                            className="block w-3 border border-[#303030] bg-[#ffd3e8]"
-                            style={{ height: `${height}%` }}
+                            key={`${era.name}-${index}`}
+                            className="analysis-era-bar block flex-1 border border-[#303030] bg-[#ffd3e8]"
+                            style={{ height: `${Math.max(14, Math.round(era.value * scale))}%`, animationDelay: era.delay }}
                           />
                         ))}
                       </div>
@@ -1875,14 +1946,22 @@ const garments = useMemo(() => {
               const total = lookGarments.reduce((sum, garment) => sum + garment.price, 0);
 
               return (
-                <Panel key={look.id} title={look.name} className="look-card">
-                  <div className="space-y-3">
-                    <div className="grid h-[180px] grid-cols-2 gap-2 border-2 border-[#303030] bg-[#d9d9d9] p-2">
-                      {lookGarments.slice(0, 6).map((garment, index) => (
-                        <div key={`${look.id}-${garment.id}`} className="flex items-center justify-center border-2 border-[#303030] bg-[#eee]">
-                          <span className="text-[9px] font-bold uppercase tracking-[0.08em]">{index + 1}</span>
-                        </div>
-                      ))}
+                <Panel key={look.id} title={look.name} className="look-card h-full">
+                  <div className="flex h-full flex-col space-y-3">
+                    <div className="grid h-[180px] grid-cols-2 grid-rows-3 gap-2 border-2 border-[#303030] bg-[#d9d9d9] p-2 sm:grid-cols-3 sm:grid-rows-2 xl:grid-cols-2 xl:grid-rows-3">
+                      {Array.from({ length: 6 }).map((_, index) => {
+                        const garment = lookGarments[index];
+                        return (
+                          <div key={`${look.id}-slot-${index}`} className="flex min-h-0 min-w-0 items-center justify-center overflow-hidden border-2 border-[#303030] bg-[#eee]">
+                            {garment?.image ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={garment.image} alt="" className="h-full w-full object-contain [image-rendering:pixelated]" />
+                            ) : (
+                              <span className={`text-[9px] font-bold uppercase tracking-[0.08em] ${garment ? "text-[#4e5666]" : "text-[#9aa1ad]"}`}>{index + 1}</span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     <div className="space-y-2 text-[10px] font-bold uppercase">
                       <div className="flex justify-between">
@@ -1898,7 +1977,7 @@ const garments = useMemo(() => {
                         <span>{lookGarments[2]?.matchScore ?? 0}%</span>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between border-2 border-[#303030] bg-[#f3f3f3] px-2 py-2 text-[10px] font-bold uppercase">
+                    <div className="mt-auto flex items-center justify-between border-2 border-[#303030] bg-[#f3f3f3] px-2 py-2 text-[10px] font-bold uppercase">
                       <span>${total}</span>
                       <div className="flex gap-2">
                         <RetroButton
@@ -2121,7 +2200,7 @@ const garments = useMemo(() => {
                     const exactInLook = displayedCurrentLook.garmentIds.includes(garment.id);
                     const sameCategoryInLook = displayedCurrentLook.garmentIds.some((id) => {
                       const inLook = garments.find((item) => item.id === id) ?? allSignatureGarments.find((item) => item.id === id);
-                      return inLook?.category === garment.category;
+                      return garmentMatchesCategory(inLook, garmentCategory(garment));
                     });
 
                     return (
@@ -2133,8 +2212,9 @@ const garments = useMemo(() => {
                         isSaved={savedGarments.includes(garment.id)}
                         actionLabel={exactInLook ? "REMOVE" : sameCategoryInLook ? "SWAP" : "ADD"}
                         onSelect={(entry) => {
-                          setSelectedCategory(entry.category);
-                          setSelectedSlotCategory(entry.category);
+                          const category = garmentCategory(entry);
+                          setSelectedCategory(category);
+                          setSelectedSlotCategory(category);
                           toggleCurrentLookGarment(entry);
                         }}
                         onSave={handleSaveGarment}
